@@ -28,6 +28,9 @@ function App() {
   const [showDebug, setShowDebug] = useState(false);
   const [snapTarget, setSnapTarget] = useState<SlitRect | null>(null);
   const [snapError, setSnapError] = useState<string | null>(null);
+  const [snapMeta, setSnapMeta] = useState<{ source?: string; latencyMs?: number }>(
+    {},
+  );
   const { settings, loaded, updateSettings } = useTyposcopeSettings();
   const localMouse = useMousePosition();
   const globalMouse = useGlobalMouse(overlayMode && loaded);
@@ -142,12 +145,18 @@ function App() {
     let unlistenRect: (() => void) | undefined;
     let unlistenErr: (() => void) | undefined;
 
-    void listen<SlitRect & { word_count?: number }>("ocr-snap-rect", ({ payload }) => {
+    void listen<
+      SlitRect & { word_count?: number; source?: string; latency_ms?: number }
+    >("ocr-snap-rect", ({ payload }) => {
       setSnapTarget({
         x: payload.x,
         y: payload.y,
         width: payload.width,
         height: payload.height,
+      });
+      setSnapMeta({
+        source: payload.source,
+        latencyMs: payload.latency_ms,
       });
       setSnapError(null);
     }).then((cleanup) => {
@@ -256,6 +265,10 @@ function App() {
             <p>
               Snap: {Math.round(snapRect.x)},{Math.round(snapRect.y)}{" "}
               {Math.round(snapRect.width)}×{Math.round(snapRect.height)}
+              {snapMeta.source ? ` · ${snapMeta.source}` : ""}
+              {snapMeta.latencyMs != null
+                ? ` · ${snapMeta.latencyMs.toFixed(1)}ms`
+                : ""}
             </p>
           )}
           {snapError && <p>OCR: {snapError}</p>}

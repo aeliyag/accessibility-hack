@@ -4,7 +4,8 @@ import type { SlitRect } from "../components/TyposcopeOverlay";
 
 export function useSmoothedSnapRect(
   target: SlitRect | null,
-  factor = 0.18,
+  /** Higher = snappier. 1 = no lag. */
+  factor = 0.72,
 ): { rect: SlitRect | null; ready: boolean } {
   const [rect, setRect] = useState<SlitRect | null>(null);
   const currentRef = useRef<SlitRect | null>(null);
@@ -21,13 +22,19 @@ export function useSmoothedSnapRect(
       const nextTarget = targetRef.current;
       if (nextTarget) {
         const current = currentRef.current ?? nextTarget;
+        // Track Y/X hard; ease width/height a bit so OCR size changes don't pop.
+        const posFactor = Math.min(1, factor + 0.15);
+        const sizeFactor = Math.max(0.35, factor - 0.15);
         const next: SlitRect = {
-          x: current.x + (nextTarget.x - current.x) * factor,
-          y: current.y + (nextTarget.y - current.y) * factor,
-          width: current.width + (nextTarget.width - current.width) * factor,
+          x: current.x + (nextTarget.x - current.x) * posFactor,
+          y: current.y + (nextTarget.y - current.y) * posFactor,
+          width: current.width + (nextTarget.width - current.width) * sizeFactor,
           height:
-            current.height + (nextTarget.height - current.height) * factor,
+            current.height + (nextTarget.height - current.height) * sizeFactor,
         };
+        // Snap the last millimetre so we don't asymptotically lag.
+        if (Math.abs(next.y - nextTarget.y) < 0.35) next.y = nextTarget.y;
+        if (Math.abs(next.x - nextTarget.x) < 0.35) next.x = nextTarget.x;
         currentRef.current = next;
         setRect(next);
       } else {
@@ -49,7 +56,7 @@ export function useSmoothedPosition(
   target: Point | null,
   slitHeight: number,
   yOffset: number,
-  factor = 0.12,
+  factor = 0.45,
 ): Point {
   const [position, setPosition] = useState<Point>(() => ({
     x: window.innerWidth / 2,
