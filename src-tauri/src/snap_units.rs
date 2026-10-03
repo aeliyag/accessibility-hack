@@ -202,15 +202,10 @@ pub fn dist_to_rect(cx: f64, cy: f64, x: f64, y: f64, w: f64, h: f64) -> f64 {
     (dx * dx + dy * dy).sqrt()
 }
 
-/// Distance from cursor to a unit (min over bands when present).
+/// Distance from cursor to a unit. Uses the outer AABB so multi-line
+/// sentences/paragraphs stay active while the cursor traverses between lines
+/// (band gaps must not count as "blank").
 pub fn dist_to_unit(unit: &UnitRect, cx: f64, cy: f64) -> f64 {
-    if !unit.bands.is_empty() {
-        return unit
-            .bands
-            .iter()
-            .map(|(x, y, w, h)| dist_to_rect(cx, cy, *x, *y, *w, *h))
-            .fold(f64::INFINITY, f64::min);
-    }
     dist_to_rect(cx, cy, unit.x, unit.y, unit.width, unit.height)
 }
 
@@ -357,6 +352,29 @@ fn token_ends_sentence(token: &str) -> bool {
 /// Split reading-order words into sentence spans (inclusive index ranges into `order`).
 pub fn segment_sentences(lines: &[LineCluster]) -> Vec<std::ops::Range<usize>> {
     let order = reading_order(lines);
+    if order.is_empty() {
+        return Vec::new();
+    }
+
+    let has_terminator = order.iter().any(|(_, _, w)| token_ends_sentence(&w.text));
+    if !has_terminator {
+        // OCR often drops `.`/`!`/`?`. Fall back to one sentence per line so S mode
+        // still visibly snaps instead of swallowing the whole ROI.
+        let mut spans = Vec::new();
+        let mut start = 0usize;
+        for (i, (li, wi, _)) in order.iter().enumerate() {
+            let line_end = *wi + 1 >= lines[*li].words.len();
+            if line_end {
+                spans.push(start..i + 1);
+                start = i + 1;
+            }
+        }
+        if start < order.len() {
+            spans.push(start..order.len());
+        }
+        return spans;
+    }
+
     let mut spans = Vec::new();
     let mut start = 0usize;
     for (i, (_, _, w)) in order.iter().enumerate() {
@@ -387,34 +405,28 @@ pub fn segment_paragraphs(lines: &[LineCluster]) -> Vec<std::ops::Range<usize>> 
         gaps.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         gaps[gaps.len() / 2]
     };
-    let blank_thresh = (median_gap * 1.75).max(median_gap + 10.0);
+    // Blank line = noticeably bigger than normal leading.
+    let blank_thresh = (median_gap * 1.9).max(median_gap + 14.0);
 
     let lefts: Vec<f64> = lines
         .iter()
         .map(|l| l.words.iter().map(|w| w.x).fold(f64::INFINITY, f64::min))
         .collect();
-    let heights: Vec<f64> = lines
-        .iter()
-        .map(|l| {
-            let mut hs: Vec<f64> = l.words.iter().map(|w| w.height).collect();
-            hs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            hs[hs.len() / 2]
-        })
-        .collect();
     let block_left = lefts.iter().cloned().fold(f64::INFINITY, f64::min);
-    let indent_thresh = 18.0;
+    let indent_thresh = 22.0;
 
     let mut paras = Vec::new();
     let mut start = 0usize;
     for i in 1..lines.len() {
         let gap = (lines[i].cy - lines[i - 1].cy).abs();
         let blank = gap >= blank_thresh;
+        // First-line indent: this line jumps right vs the block's left edge and vs prior line.
         let indent = lefts[i] >= block_left + indent_thresh
-            && (lefts[i] - lefts[i - 1]).abs() >= indent_thresh * 0.8;
-        let margin_shift = (lefts[i] - lefts[i - 1]).abs() >= 22.0;
-        let height_shift = (heights[i] - heights[i - 1]).abs() >= heights[i - 1].max(8.0) * 0.45;
+            && lefts[i] >= lefts[i - 1] + indent_thresh * 0.75;
+        // Only treat large margin jumps as new blocks (avoid OCR jitter splitting every line).
+        let margin_shift = (lefts[i] - lefts[i - 1]).abs() >= 40.0;
 
-        if blank || indent || margin_shift || height_shift {
+        if blank || indent || margin_shift {
             paras.push(start..i);
             start = i;
         }
@@ -616,6 +628,24 @@ mod tests {
         // Cursor on first para should not include indented block if split worked.
         let unit2 = select_unit(&lines, SnapMode::Paragraph, 50.0, 72.0).unwrap();
         assert!(unit2.word_count <= 3);
+    }
+
+    #[test]
+    fn sentence_without_terminators_falls_back_to_lines() {
+        let words = vec![
+            w("Hello", 10.0, 10.0, 40.0, 14.0),
+            w("there", 55.0, 10.0, 40.0, 14.0),
+            w("Friend", 10.0, 40.0, 45.0, 14.0),
+            w("again", 60.0, 40.0, 40.0, 14.0),
+        ];
+        let lines = cluster_lines(&words);
+        assert_eq!(lines.len(), 2);
+        let spans = segment_sentences(&lines);
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].len(), 2);
+        assert_eq!(spans[1].len(), 2);
+        let unit = select_unit(&lines, SnapMode::Sentence, 20.0, 12.0).unwrap();
+        assert_eq!(unit.word_count, 2);
     }
 
     #[test]

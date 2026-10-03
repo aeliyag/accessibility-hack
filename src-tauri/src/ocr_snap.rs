@@ -103,13 +103,11 @@ const EMPTY_BOX_SENTENCE: (f64, f64) = (320.0, 42.0);
 const EMPTY_BOX_PARAGRAPH: (f64, f64) = (460.0, 120.0);
 
 const EDGE_MARGIN: f64 = 28.0;
-const MAX_CACHE_AGE: Duration = Duration::from_secs(4);
-const CHANGE_CHECK_EVERY: Duration = Duration::from_millis(350);
+const MAX_CACHE_AGE: Duration = Duration::from_secs(6);
+const CHANGE_CHECK_EVERY: Duration = Duration::from_millis(900);
 const LOOP_TICK: Duration = Duration::from_millis(8);
 /// Rescan when the cursor has moved this far from the capture mouse position.
-const MOVE_RESCAN_PX: f64 = 64.0;
-/// While over blank / no near unit, retry OCR at least this often (escalate map).
-const EMPTY_RESCAN_EVERY: Duration = Duration::from_millis(280);
+const MOVE_RESCAN_PX: f64 = 72.0;
 /// Stick to a line only while the cursor is still inside its band (± this).
 const LINE_BAND_PAD: f64 = 6.0;
 /// Tiny pad so hysteresis only kills neighbor jitter — never holds after leave.
@@ -236,9 +234,6 @@ pub fn start_auto_snap_loop(app: AppHandle) {
         let mut was_enabled = false;
         let mut ocr_inflight = false;
         let mut latency_samples: Vec<f64> = Vec::new();
-        let mut last_empty_rescan = Instant::now()
-            .checked_sub(EMPTY_RESCAN_EVERY)
-            .unwrap_or_else(Instant::now);
         let mut last_mode = current_snap_mode();
 
         loop {
@@ -262,6 +257,7 @@ pub fn start_auto_snap_loop(app: AppHandle) {
                 continue;
             };
 
+            let (mouse_x, mouse_y) = cg_mouse_location_top_left();
             let mode = current_snap_mode();
             if mode != last_mode {
                 if let Some(c) = cache.as_mut() {
@@ -281,30 +277,50 @@ pub fn start_auto_snap_loop(app: AppHandle) {
                             result.elapsed_ms
                         );
                         let _ = window.emit("ocr-snap-error", err);
+                        // Keep prior cache — a failed recapture must not kill follow.
                     } else if let Some(new_cache) = result.cache {
-                        eprintln!(
-                            "[typoscope ocr] tier={} ROI=({:.0},{:.0},{:.0},{:.0}) words={} lines={} ocr={:.0}ms fingerprint={:#x}",
-                            new_cache.tier,
-                            new_cache.roi.x,
-                            new_cache.roi.y,
-                            new_cache.roi.w,
-                            new_cache.roi.h,
-                            new_cache.words.len(),
-                            new_cache.lines.len(),
-                            result.elapsed_ms,
-                            new_cache.fingerprint
-                        );
-                        cache = Some(new_cache);
+                        let old_has_near = cache
+                            .as_ref()
+                            .and_then(|c| select_unit(&c.lines, mode, mouse_x, mouse_y))
+                            .is_some();
+                        let new_has_near =
+                            select_unit(&new_cache.lines, mode, mouse_x, mouse_y).is_some();
+                        // Never replace a map that still hits under the cursor with one that doesn't.
+                        // That was wiping follow after the first word (empty/tilted rescans).
+                        if old_has_near && !new_has_near {
+                            eprintln!(
+                                "[typoscope ocr] keep prior cache (still near); new tier={} words={} missed cursor",
+                                new_cache.tier,
+                                new_cache.words.len()
+                            );
+                        } else {
+                            eprintln!(
+                                "[typoscope ocr] tier={} ROI=({:.0},{:.0},{:.0},{:.0}) words={} lines={} ocr={:.0}ms fingerprint={:#x}",
+                                new_cache.tier,
+                                new_cache.roi.x,
+                                new_cache.roi.y,
+                                new_cache.roi.w,
+                                new_cache.roi.h,
+                                new_cache.words.len(),
+                                new_cache.lines.len(),
+                                result.elapsed_ms,
+                                new_cache.fingerprint
+                            );
+                            cache = Some(new_cache);
+                        }
                     } else {
-                        // Explicit empty map — clear stale cache so empty-box / free-slit wins.
-                        cache = None;
+                        // Empty OCR — retain prior map. Clearing here caused "one word then dead".
+                        eprintln!(
+                            "[typoscope ocr] empty OCR ({:.0}ms); retaining prior cache={}",
+                            result.elapsed_ms,
+                            cache.is_some()
+                        );
                     }
                 }
                 Err(TryRecvError::Empty) => {}
                 Err(TryRecvError::Disconnected) => break,
             }
 
-            let (mouse_x, mouse_y) = cg_mouse_location_top_left();
             let below_id = overlay_cg_window_id(&window);
             let opts = CaptureOptions {
                 below_window_id: below_id,
@@ -330,16 +346,17 @@ pub fn start_auto_snap_loop(app: AppHandle) {
                     ((cx - mouse_x).powi(2) + (cy - mouse_y).powi(2)).sqrt() >= MOVE_RESCAN_PX
                 })
                 .unwrap_or(false);
-            let no_near_unit = cache
+            // Only fingerprint-check when we are not currently locked onto a unit.
+            // Constant rescans while hovering were replacing good maps and killing follow.
+            let has_near_now = cache
                 .as_ref()
-                .map(|c| select_unit(&c.lines, mode, mouse_x, mouse_y).is_none())
-                .unwrap_or(true);
-            let empty_rescan_due = no_near_unit && last_empty_rescan.elapsed() >= EMPTY_RESCAN_EVERY;
+                .and_then(|c| select_unit(&c.lines, mode, mouse_x, mouse_y))
+                .is_some();
 
             let mut needs_recapture =
-                cache.is_none() || outside_roi || outside_lines || aged_out || moved_far || empty_rescan_due;
+                cache.is_none() || outside_roi || outside_lines || aged_out || moved_far;
 
-            if !needs_recapture && below_id.is_some() {
+            if !needs_recapture && !has_near_now && below_id.is_some() {
                 if let Some(c) = cache.as_mut() {
                     if c.last_change_check.elapsed() >= CHANGE_CHECK_EVERY {
                         let sample_w = c.roi.w.min(240.0);
@@ -357,9 +374,6 @@ pub fn start_auto_snap_loop(app: AppHandle) {
 
             if needs_recapture && !ocr_inflight {
                 ocr_inflight = true;
-                if empty_rescan_due {
-                    last_empty_rescan = Instant::now();
-                }
                 let _ = job_tx.send(OcrJob {
                     mouse_x,
                     mouse_y,
@@ -417,7 +431,6 @@ pub fn start_auto_snap_loop(app: AppHandle) {
                     let _ = window.emit("ocr-snap-rect", rect);
                 }
             } else if last_emitted.is_some() {
-                // Line mode + blank: release to free mouse-following slit.
                 last_emitted = None;
                 let _ = window.emit("ocr-snap-clear", ());
             }
