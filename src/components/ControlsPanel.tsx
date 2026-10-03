@@ -14,6 +14,7 @@ const SHORTCUTS = [
   { keys: "Shift+M", action: "Toggle edit mode (drag, resize, scroll speed)" },
   { keys: "Shift+R", action: "Auto-read — scroll content under cursor" },
   { keys: "Shift+H", action: "Show / hide this panel" },
+  { keys: "Cmd+T", action: "Show / hide screen timers" },
   { keys: "↑ / ↓", action: "Nudge reading box" },
   { keys: "Shift+[ / ]", action: "Mask opacity" },
   { keys: "1", action: "Cycle underlay color" },

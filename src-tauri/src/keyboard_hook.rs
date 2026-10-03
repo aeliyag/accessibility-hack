@@ -2,7 +2,15 @@ use device_query::{DeviceQuery, DeviceState, Keycode};
 use std::{collections::HashSet, thread, time::Duration};
 use tauri::{Emitter, WebviewWindow};
 
-fn poll_shortcut(key: Keycode, shift: bool) -> Option<&'static str> {
+fn poll_shortcut(key: Keycode, shift: bool, command: bool, control: bool) -> Option<&'static str> {
+    if !shift && key == Keycode::T && (command || control) {
+        return Some("meta+t");
+    }
+
+    if command || control {
+        return None;
+    }
+
     match key {
         Keycode::M if shift => Some("shift+m"),
         Keycode::X if shift => Some("shift+x"),
@@ -30,9 +38,15 @@ pub fn start_keyboard_hook(window: WebviewWindow) {
 
             let shift = current_keys.contains(&Keycode::LShift)
                 || current_keys.contains(&Keycode::RShift);
+            let command = current_keys.contains(&Keycode::Command)
+                || current_keys.contains(&Keycode::RCommand)
+                || current_keys.contains(&Keycode::LMeta)
+                || current_keys.contains(&Keycode::RMeta);
+            let control = current_keys.contains(&Keycode::LControl)
+                || current_keys.contains(&Keycode::RControl);
 
             for key in current_keys.difference(&previous_keys) {
-                if let Some(shortcut) = poll_shortcut(*key, shift) {
+                if let Some(shortcut) = poll_shortcut(*key, shift, command, control) {
                     if window.emit("device-key-down", shortcut).is_err() {
                         return;
                     }

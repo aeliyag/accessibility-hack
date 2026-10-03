@@ -2,8 +2,11 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ControlsPanel } from "./components/ControlsPanel";
+import { TimerHud } from "./components/TimerHud";
 import { TyposcopeOverlay } from "./components/TyposcopeOverlay";
 import { useAutoRead, type AutoReadResult } from "./hooks/useAutoRead";
+import { useFaceGuard } from "./hooks/useFaceGuard";
+import { unlockAlertSound } from "./lib/alertSound";
 import { useClickThrough } from "./hooks/useClickThrough";
 import { useGlobalMouse } from "./hooks/useGlobalMouse";
 import { useMousePosition } from "./hooks/useMousePosition";
@@ -22,6 +25,9 @@ function App() {
   const overlayMode = isTauri();
   const [showDebug, setShowDebug] = useState(false);
   const [showControls, setShowControls] = useState(false);
+  const [showTimers, setShowTimers] = useState(false);
+  const faceGuard = useFaceGuard();
+  const announcedBreakRef = useRef(0);
   const [editMode, setEditMode] = useState(false);
   const [followPaused, setFollowPaused] = useState(false);
   const [autoScroll, setAutoScroll] = useState(false);
@@ -231,6 +237,13 @@ function App() {
 
   const applyControlKey = useCallback(
     (key: string, isRepeat = false) => {
+      unlockAlertSound();
+
+      if (key === "meta+t" && !isRepeat) {
+        setShowTimers((value) => !value);
+        return;
+      }
+
       if (key === "shift+m" && !isRepeat) {
         toggleEditMode();
         return;
@@ -288,6 +301,17 @@ function App() {
   );
 
   useEffect(() => {
+    if (faceGuard.breakId === announcedBreakRef.current) {
+      return;
+    }
+
+    announcedBreakRef.current = faceGuard.breakId;
+    if (faceGuard.breakId > 0) {
+      setShowTimers(true);
+    }
+  }, [faceGuard.breakId]);
+
+  useEffect(() => {
     if (!overlayMode || !loaded) {
       return;
     }
@@ -306,6 +330,18 @@ function App() {
       // them here as well can toggle controls twice while the overlay is
       // accepting pointer input (for example while the help panel is open).
       if (overlayMode) {
+        return;
+      }
+
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        event.key.toLowerCase() === "t" &&
+        !event.shiftKey &&
+        !event.altKey &&
+        !event.repeat
+      ) {
+        event.preventDefault();
+        applyControlKey("meta+t");
         return;
       }
 
@@ -408,6 +444,8 @@ function App() {
         onPositionChange={handleControlsPanelMove}
       />
 
+      <TimerHud visible={showTimers} guard={faceGuard} />
+
       {followPaused && !editMode && !autoScroll && (
         <div className="follow-paused-badge">
           Follow paused — Shift+X to resume
@@ -426,7 +464,7 @@ function App() {
           <p>Move your mouse to position the reading box.</p>
           <p>
             Shift+X pause · Shift+M edit · Shift+R auto-read · Shift+H controls
-            · ↑/↓ nudge · Shift+[ / ] opacity · 1 color · D debug
+            · Cmd+T timers · ↑/↓ nudge · Shift+[ / ] opacity · 1 color · D debug
           </p>
         </header>
       )}

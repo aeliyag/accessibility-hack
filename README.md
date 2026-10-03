@@ -20,6 +20,7 @@ It can help people with:
 - **Edit mode** (Shift+M toggle) — drag to move, corner handles to resize, scroll-speed slider; no on-screen labels
 - **Auto-read** (Shift+R toggle) — slowly scrolls the page or document under your cursor at a comfortable reading speed; the reading box stays put while content moves
 - **Controls panel** (Shift+H toggle) — keyboard shortcut reference overlay
+- **Screen timers** (Cmd+T toggle) — MediaPipe watches the webcam. An alarm sounds if your face stays too close for 10 minutes. If your eyes stay on the screen for 20 minutes, Typoscope asks you to look 20 feet away and starts a 20 second timer
 - Click-through overlay in follow mode — interact with apps underneath normally
 - Adjustable box size, mask opacity, and underlay color
 - Global keyboard shortcuts (no focus required)
@@ -42,6 +43,7 @@ It can help people with:
 | Shift+M | Toggle edit mode (drag / resize / scroll speed) |
 | Shift+R | Toggle auto-read (scroll content under cursor) |
 | Shift+H | Show / hide controls panel |
+| Cmd+T | Show / hide screen timers |
 | ↑ / ↓ | Nudge the reading box up or down |
 | Shift+[ / Shift+] | Decrease / increase mask opacity |
 | 1 | Cycle underlay color presets |
@@ -89,7 +91,7 @@ npm run tauri build
 
 | Platform | Status |
 | --- | --- |
-| **macOS** | Best supported — uses NSPanel for non-activating overlay across Spaces and fullscreen apps. Grant **Accessibility** permission so shortcuts (Shift+X, etc.) do not type into apps below |
+| **macOS** | Best supported — uses NSPanel for non-activating overlay across Spaces and fullscreen apps. Grant **Accessibility** so shortcuts (Shift+X, Cmd+T, etc.) do not type into apps below, and **Camera** so face distance and the 20-minute eye break can run |
 | **Windows** | Transparent always-on-top window sized to primary monitor |
 | **Linux (X11)** | Same as Windows; global mouse polling via `device_query` |
 | **Linux (Wayland)** | Limited — global mouse polling and layered overlays are inconsistent on Wayland; arrow-key nudging still works |
@@ -104,8 +106,9 @@ src/
   components/TyposcopeHandles.tsx   # Edit mode drag + corner resize
   components/ScrollSpeedHandle.tsx  # Edit mode scroll-speed slider
   components/ControlsPanel.tsx      # Shift+H shortcut reference
-  hooks/                            # Mouse tracking, smoothing, settings, click-through
-  lib/                              # Settings, box geometry, Tauri detection
+  components/TimerHud.tsx           # Cmd+T screen timers and break alerts
+  hooks/                            # Mouse tracking, face guard, settings, click-through
+  lib/                              # Settings, box geometry, screen-break timers
 src-tauri/
   src/overlay_panel.rs              # macOS NSPanel configuration
   src/overlay_window.rs             # Windows/Linux monitor sizing

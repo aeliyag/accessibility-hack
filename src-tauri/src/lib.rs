@@ -1,4 +1,5 @@
 mod auto_read;
+mod camera_access;
 mod click_through;
 mod keyboard_hook;
 mod keyboard_suppressor;
@@ -19,7 +20,11 @@ use tauri::Manager;
 pub fn run() {
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_store::Builder::default().build());
+        .plugin(tauri_plugin_store::Builder::default().build())
+        .on_permission_request(|_webview, kind| match kind {
+            tauri::webview::PermissionKind::Camera => tauri::webview::PermissionResponse::Allow,
+            _ => tauri::webview::PermissionResponse::Default,
+        });
 
     #[cfg(target_os = "macos")]
     {
@@ -29,6 +34,8 @@ pub fn run() {
     builder
         .invoke_handler(tauri::generate_handler![
             auto_read::auto_scroll_step,
+            camera_access::prepare_camera_prompt,
+            camera_access::restore_overlay_policy,
             click_through::set_click_through
         ])
         .setup(|app| {

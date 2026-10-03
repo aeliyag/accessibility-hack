@@ -18,6 +18,10 @@ mod macos {
     const AUTOREPEAT_FIELD: u32 = 8;
     const KEYCODE_FIELD: u32 = 9;
     const SHIFT_FLAG: u64 = 0x0002_0000;
+    const CONTROL_FLAG: u64 = 0x0004_0000;
+    const ALTERNATE_FLAG: u64 = 0x0008_0000;
+    const COMMAND_FLAG: u64 = 0x0010_0000;
+    const KEYCODE_T: i64 = 17;
 
     static SHORTCUT_SENDER: OnceLock<SyncSender<&'static str>> = OnceLock::new();
 
@@ -85,6 +89,23 @@ mod macos {
 
         let flags = CGEventGetFlags(event);
         let keycode = CGEventGetIntegerValueField(event, KEYCODE_FIELD);
+        let command = flags & COMMAND_FLAG != 0;
+        let plain_command = command
+            && flags & SHIFT_FLAG == 0
+            && flags & CONTROL_FLAG == 0
+            && flags & ALTERNATE_FLAG == 0;
+
+        if plain_command && keycode == KEYCODE_T {
+            if event_type == KEY_DOWN
+                && CGEventGetIntegerValueField(event, AUTOREPEAT_FIELD) == 0
+            {
+                if let Some(sender) = SHORTCUT_SENDER.get() {
+                    let _ = sender.try_send("meta+t");
+                }
+            }
+
+            return ptr::null_mut();
+        }
 
         if flags & SHIFT_FLAG != 0 {
             let Some(shortcut) = shortcut_for_keycode(keycode) else {
