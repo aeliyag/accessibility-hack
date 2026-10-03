@@ -31,6 +31,9 @@ pub fn start_global_mouse_stream(window: WebviewWindow) {
 
             let current_keys: HashSet<Keycode> = device_state.get_keys().into_iter().collect();
 
+            let shift_held = current_keys.contains(&Keycode::LShift)
+                || current_keys.contains(&Keycode::RShift);
+
             for key in current_keys.difference(&previous_keys) {
                 let shortcut = match key {
                     Keycode::Up => Some("arrowup"),
@@ -42,6 +45,7 @@ pub fn start_global_mouse_stream(window: WebviewWindow) {
                     Keycode::Key1 | Keycode::Numpad1 => Some("1"),
                     Keycode::T => Some("t"),
                     Keycode::D => Some("d"),
+                    Keycode::S if shift_held => Some("shift+s"),
                     _ => None,
                 };
 

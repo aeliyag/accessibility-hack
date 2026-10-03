@@ -1,5 +1,6 @@
 mod mouse_hook;
 mod tray;
+mod tts;
 
 #[cfg(target_os = "macos")]
 mod overlay_panel;
@@ -14,7 +15,8 @@ use tauri::Manager;
 pub fn run() {
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_store::Builder::default().build());
+        .plugin(tauri_plugin_store::Builder::default().build())
+        .invoke_handler(tauri::generate_handler![tts::capture_slit, tts::speak_text]);
 
     #[cfg(target_os = "macos")]
     {

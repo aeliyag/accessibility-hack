@@ -5,6 +5,7 @@ import { TyposcopeOverlay } from "./components/TyposcopeOverlay";
 import { useGlobalMouse } from "./hooks/useGlobalMouse";
 import { useMousePosition } from "./hooks/useMousePosition";
 import { useSmoothedPosition } from "./hooks/useSmoothedPosition";
+import { useSpeakSlit } from "./hooks/useSpeakSlit";
 import { useTyposcopeSettings } from "./hooks/useTyposcopeSettings";
 import { COLOR_PRESETS } from "./lib/settings";
 import { isTauri } from "./lib/isTauri";
@@ -28,6 +29,8 @@ function App() {
     settings.slitHeight,
     settings.yOffset,
   );
+  const { status: speechStatus, errorMessage: speechError, speak } =
+    useSpeakSlit({ centerY: position.y, slitHeight: settings.slitHeight });
 
   const applyControlKey = useCallback(
     (key: string, isRepeat = false) => {
@@ -83,9 +86,11 @@ function App() {
         }));
       } else if (key === "d" && !isRepeat) {
         setShowDebug((value) => !value);
+      } else if ((key === "s" || key === "shift+s") && !isRepeat && overlayMode) {
+        void speak();
       }
     },
-    [updateSettings],
+    [overlayMode, speak, updateSettings],
   );
 
   useEffect(() => {
@@ -160,7 +165,7 @@ function App() {
 
       {overlayMode && showDebug && (
         <div className="debug-panel debug-panel--overlay">
-          <p>Overlay mode — D debug · T toggle · G/H height · [/] opacity · 1 color</p>
+          <p>Overlay mode — D debug · T toggle · G/H height · [/] opacity · 1 color · Shift+S speak</p>
           <p>
             Mouse:{" "}
             {mouse ? `${Math.round(mouse.x)}, ${Math.round(mouse.y)}` : "—"}
@@ -168,6 +173,20 @@ function App() {
           <p>Slit Y: {Math.round(position.y)} (offset {settings.yOffset}px)</p>
           <p>Height: {settings.slitHeight}px · Opacity: {settings.maskOpacity.toFixed(2)}</p>
           <p>Visible: {settings.visible ? "yes" : "no"}</p>
+          <p>
+            Speech: {speechStatus}
+            {speechStatus === "error" && speechError ? ` — ${speechError}` : ""}
+          </p>
+        </div>
+      )}
+
+      {overlayMode && !showDebug && speechStatus !== "idle" && (
+        <div className="debug-panel debug-panel--overlay">
+          <p>
+            {speechStatus === "error"
+              ? `Speech error: ${speechError ?? "unknown error"}`
+              : `Speech: ${speechStatus}…`}
+          </p>
         </div>
       )}
 
