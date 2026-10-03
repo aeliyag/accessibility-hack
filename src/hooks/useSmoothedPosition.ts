@@ -1,34 +1,34 @@
 import { useEffect, useRef, useState } from "react";
+import { clampBox, type BoxRect } from "../lib/boxGeometry";
 import type { Point } from "./useMousePosition";
 
-function clampY(y: number, slitHeight: number): number {
-  const half = slitHeight / 2;
-  const minY = half;
-  const maxY = Math.max(half, window.innerHeight - half);
-  return Math.min(maxY, Math.max(minY, y));
-}
+const FOLLOW_FACTOR = 0.3;
 
 export function useSmoothedPosition(
   target: Point | null,
-  slitHeight: number,
-  yOffset: number,
-  factor = 0.12,
+  boxWidth: number,
+  boxHeight: number,
 ): Point {
-  const [position, setPosition] = useState<Point>(() => ({
-    x: window.innerWidth / 2,
-    y: clampY(window.innerHeight / 2, slitHeight),
-  }));
+  const [position, setPosition] = useState<Point>(() => {
+    const initial = clampBox({
+      centerX: window.innerWidth / 2,
+      centerY: window.innerHeight / 2,
+      boxWidth,
+      boxHeight,
+    });
+    return { x: initial.centerX, y: initial.centerY };
+  });
   const currentRef = useRef(position);
   const targetRef = useRef(target);
-  const yOffsetRef = useRef(yOffset);
+  const boxRef = useRef({ boxWidth, boxHeight });
 
   useEffect(() => {
     targetRef.current = target;
   }, [target]);
 
   useEffect(() => {
-    yOffsetRef.current = yOffset;
-  }, [yOffset]);
+    boxRef.current = { boxWidth, boxHeight };
+  }, [boxWidth, boxHeight]);
 
   useEffect(() => {
     let frameId = 0;
@@ -37,13 +37,17 @@ export function useSmoothedPosition(
       const nextTarget = targetRef.current;
       if (nextTarget) {
         const current = currentRef.current;
-        const desiredY = clampY(
-          nextTarget.y + yOffsetRef.current,
-          slitHeight,
-        );
+        const { boxWidth: w, boxHeight: h } = boxRef.current;
+        const desired = clampBox({
+          centerX: nextTarget.x,
+          centerY: nextTarget.y,
+          boxWidth: w,
+          boxHeight: h,
+        } satisfies BoxRect);
+
         const next = {
-          x: current.x,
-          y: current.y + (desiredY - current.y) * factor,
+          x: current.x + (desired.centerX - current.x) * FOLLOW_FACTOR,
+          y: current.y + (desired.centerY - current.y) * FOLLOW_FACTOR,
         };
 
         currentRef.current = next;
@@ -55,7 +59,7 @@ export function useSmoothedPosition(
 
     frameId = window.requestAnimationFrame(animate);
     return () => window.cancelAnimationFrame(frameId);
-  }, [factor, slitHeight]);
+  }, []);
 
   return position;
 }

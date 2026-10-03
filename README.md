@@ -1,6 +1,6 @@
 # Typoscope
 
-A cross-platform desktop reading guide that overlays a transparent mask on your screen, leaving a horizontal slit visible so you can focus on one or two lines of text at a time.
+A cross-platform desktop reading guide that overlays a transparent mask on your screen, leaving a bounded reading box visible so you can focus on text without visual crowding.
 
 Built with **Tauri 2**, **React 19**, and **TypeScript**. The overlay architecture is adapted from the [eye-stick-figure](https://github.com/aeliyag/eye-stick-figure) reference project.
 
@@ -16,22 +16,35 @@ It can help people with:
 
 ## Features
 
-- Full-screen transparent overlay with a reading slit that follows your mouse
-- Click-through overlay — interact with apps underneath normally
-- Adjustable slit height, mask opacity, and underlay color
+- Bounded reading box centered on your mouse (follow mode)
+- **Edit mode** (Shift+M toggle) — drag to move, corner handles to resize, scroll-speed slider; no on-screen labels
+- **Auto-read** (Shift+R toggle) — slowly scrolls the page or document under your cursor at a comfortable reading speed; the reading box stays put while content moves
+- **Controls panel** (Shift+H toggle) — keyboard shortcut reference overlay
+- Click-through overlay in follow mode — interact with apps underneath normally
+- Adjustable box size, mask opacity, and underlay color
 - Global keyboard shortcuts (no focus required)
 - Settings persist across restarts
 - System tray for show / hide / quit (macOS runs as a background accessory app)
+
+## Modes
+
+| Mode | Trigger | Behavior |
+| --- | --- | --- |
+| **Follow** (default) | — | Box center tracks mouse; clicks pass through to apps below |
+| **Edit** | Shift+M (toggle) | Box position frozen; drag body or corners to arrange; blue slider adjusts scroll speed; overlay captures mouse |
+| **Auto-read** | Shift+R (toggle) | Scrolls content under the cursor at reading speed; box X tracks mouse, Y stays fixed |
 
 ## Keyboard shortcuts
 
 | Key | Action |
 | --- | --- |
-| ↑ / ↓ | Nudge the reading slit up or down |
-| G / H | Increase / decrease slit height |
-| [ / ] | Decrease / increase mask opacity |
+| Shift+X | Toggle mouse follow (static / dynamic) |
+| Shift+M | Toggle edit mode (drag / resize / scroll speed) |
+| Shift+R | Toggle auto-read (scroll content under cursor) |
+| Shift+H | Show / hide controls panel |
+| ↑ / ↓ | Nudge the reading box up or down |
+| Shift+[ / Shift+] | Decrease / increase mask opacity |
 | 1 | Cycle underlay color presets |
-| T | Toggle overlay visibility |
 | D | Toggle debug HUD |
 
 ## Development
@@ -56,7 +69,7 @@ Fast UI iteration without rebuilding Rust:
 npm run dev
 ```
 
-Open http://localhost:1420 — uses local mouse tracking with a dark preview background.
+Open http://localhost:1420 — uses local mouse tracking with a dark preview background. Shift+M works via keyboard.
 
 ### Tauri dev mode
 
@@ -76,7 +89,7 @@ npm run tauri build
 
 | Platform | Status |
 | --- | --- |
-| **macOS** | Best supported — uses NSPanel for non-activating overlay across Spaces and fullscreen apps |
+| **macOS** | Best supported — uses NSPanel for non-activating overlay across Spaces and fullscreen apps. Grant **Accessibility** permission so shortcuts (Shift+X, etc.) do not type into apps below |
 | **Windows** | Transparent always-on-top window sized to primary monitor |
 | **Linux (X11)** | Same as Windows; global mouse polling via `device_query` |
 | **Linux (Wayland)** | Limited — global mouse polling and layered overlays are inconsistent on Wayland; arrow-key nudging still works |
@@ -87,9 +100,12 @@ Multi-monitor support is limited to the primary monitor in v1.
 
 ```
 src/
-  components/TyposcopeOverlay.tsx   # Mask + reading slit rendering
-  hooks/                            # Mouse tracking, smoothing, settings
-  lib/                              # Settings defaults and Tauri detection
+  components/TyposcopeOverlay.tsx   # Mask + reading box rendering
+  components/TyposcopeHandles.tsx   # Edit mode drag + corner resize
+  components/ScrollSpeedHandle.tsx  # Edit mode scroll-speed slider
+  components/ControlsPanel.tsx      # Shift+H shortcut reference
+  hooks/                            # Mouse tracking, smoothing, settings, click-through
+  lib/                              # Settings, box geometry, Tauri detection
 src-tauri/
   src/overlay_panel.rs              # macOS NSPanel configuration
   src/overlay_window.rs             # Windows/Linux monitor sizing
