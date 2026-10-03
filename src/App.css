@@ -1,0 +1,114 @@
+:root {
+  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  font-weight: 400;
+  color: #f6f6f6;
+  background-color: #0b0f14;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+}
+
+.app {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: radial-gradient(circle at top, #152033 0%, #0b0f14 55%);
+}
+
+.app--overlay {
+  background: transparent;
+}
+
+.app--overlay,
+.app--overlay ~ * {
+  background: transparent;
+}
+
+html:has(.app--overlay),
+html:has(.app--overlay) body,
+html:has(.app--overlay) #root {
+  background: transparent !important;
+}
+
+.hud {
+  position: fixed;
+  top: 1.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  text-align: center;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.hud h1 {
+  margin: 0 0 0.25rem;
+  font-size: 1.5rem;
+}
+
+.hud p {
+  margin: 0.25rem 0;
+  color: #b8c4d9;
+  font-size: 0.95rem;
+}
+
+.debug-panel {
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  padding: 0.75rem 1rem;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.875rem;
+  z-index: 20;
+}
+
+.debug-panel p {
+  margin: 0.25rem 0;
+}
+
+.debug-panel--overlay {
+  pointer-events: none;
+}
+
+.tracking-controls {
+  position: fixed;
+  bottom: 1.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+}
+
+.tracking-controls button {
+  padding: 0.65rem 1rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #f6f6f6;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  cursor: pointer;
+  font: inherit;
+}
+
+.tracking-controls button:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
