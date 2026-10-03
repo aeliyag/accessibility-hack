@@ -5,6 +5,9 @@ mod tray;
 mod ocr_snap;
 
 #[cfg(target_os = "macos")]
+mod screen_capture;
+
+#[cfg(target_os = "macos")]
 mod overlay_panel;
 
 #[cfg(not(target_os = "macos"))]

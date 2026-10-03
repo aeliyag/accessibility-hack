@@ -6,6 +6,8 @@ use std::thread;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 
+use crate::screen_capture::capture_roi_png;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WordBox {
     pub text: String,
@@ -25,7 +27,16 @@ pub struct SnapRect {
     pub word_count: usize,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CaptureMeta {
+    image_width: Option<i32>,
+    image_height: Option<i32>,
+    word_count: Option<i32>,
+}
+
 static AUTO_SNAP: AtomicBool = AtomicBool::new(false);
+const DEBUG_PNG: &str = "/tmp/typoscope-ocr-debug.png";
 
 pub fn set_auto_snap_enabled(enabled: bool) {
     AUTO_SNAP.store(enabled, Ordering::SeqCst);
@@ -72,11 +83,12 @@ pub fn start_auto_snap_loop(app: AppHandle) {
                     }
                 }
                 Err(err) => {
+                    eprintln!("[typoscope ocr] {err}");
                     let _ = window.emit("ocr-snap-error", err);
                 }
             }
 
-            thread::sleep(Duration::from_millis(180));
+            thread::sleep(Duration::from_millis(220));
         }
     });
 }
@@ -85,7 +97,7 @@ fn ocr_helper_path() -> PathBuf {
     PathBuf::from(env!("TYPOSCOPE_OCR_HELPER"))
 }
 
-fn cg_mouse_location() -> (f64, f64) {
+fn cg_mouse_location_top_left() -> (f64, f64) {
     use std::os::raw::c_void;
 
     type CGEventRef = *const c_void;
@@ -100,6 +112,7 @@ fn cg_mouse_location() -> (f64, f64) {
     #[link(name = "CoreGraphics", kind = "framework")]
     extern "C" {
         fn CGEventCreate(source: CGEventSourceRef) -> CGEventRef;
+        // Global desktop coords; origin at top-left of the main display.
         fn CGEventGetLocation(event: CGEventRef) -> CGPoint;
     }
 
@@ -119,63 +132,122 @@ fn cg_mouse_location() -> (f64, f64) {
     }
 }
 
+fn cg_main_display_size() -> (f64, f64) {
+    use std::os::raw::c_uint;
+
+    #[repr(C)]
+    struct CGPoint {
+        x: f64,
+        y: f64,
+    }
+    #[repr(C)]
+    struct CGSize {
+        width: f64,
+        height: f64,
+    }
+    #[repr(C)]
+    struct CGRect {
+        origin: CGPoint,
+        size: CGSize,
+    }
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGMainDisplayID() -> c_uint;
+        fn CGDisplayBounds(display: c_uint) -> CGRect;
+    }
+
+    unsafe {
+        let bounds = CGDisplayBounds(CGMainDisplayID());
+        (bounds.size.width, bounds.size.height)
+    }
+}
+
 fn capture_and_snap(window: &WebviewWindow) -> Result<Option<SnapRect>, String> {
     let scale = window.scale_factor().map_err(|e| e.to_string())?;
-    let monitor = window
-        .primary_monitor()
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "no primary monitor".to_string())?;
-    let monitor_size = monitor.size();
-    let monitor_pos = monitor.position();
-    let screen_w = monitor_size.width as f64 / scale;
-    let screen_h = monitor_size.height as f64 / scale;
+    let (screen_w, screen_h) = cg_main_display_size();
 
-    // CG mouse: bottom-left origin, points.
-    let (cg_x, cg_y_bottom) = cg_mouse_location();
-    let mouse_x = cg_x;
-    let mouse_y = screen_h - cg_y_bottom;
+    // IMPORTANT: CGEventGetLocation is already top-left. The previous code
+    // treated it as Quartz bottom-left and flipped Y — wrong on modern macOS.
+    let (mouse_x, mouse_y) = cg_mouse_location_top_left();
 
-    let roi_w = screen_w.min(1400.0).max(400.0);
-    let roi_h = 220.0;
+    let roi_w = screen_w.min(1200.0).max(320.0);
+    let roi_h = 200.0;
     let roi_x = (mouse_x - roi_w / 2.0).clamp(0.0, (screen_w - roi_w).max(0.0));
     let roi_y = (mouse_y - roi_h / 2.0).clamp(0.0, (screen_h - roi_h).max(0.0));
 
-    let capture_x = monitor_pos.x as f64 / scale + roi_x;
-    let capture_y = monitor_pos.y as f64 / scale + roi_y;
-
-    // Hide overlay so masks/underlay don't pollute OCR.
-    let _ = window.hide();
-    thread::sleep(Duration::from_millis(16));
-
-    let tmp = std::env::temp_dir().join(format!("typoscope-ocr-{}.png", std::process::id()));
-    let region = format!(
-        "{},{},{},{}",
-        capture_x.round() as i32,
-        capture_y.round() as i32,
-        roi_w.round() as i32,
-        roi_h.round() as i32
-    );
-
-    let capture_status = Command::new("screencapture")
-        .args(["-x", "-R", &region])
-        .arg(&tmp)
-        .status()
-        .map_err(|e| format!("screencapture failed: {e}"))?;
-
-    let _ = window.show();
-
-    if !capture_status.success() {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(
-            "screencapture failed — grant Screen Recording to Typoscope / your terminal".into(),
-        );
+    if roi_w < 8.0 || roi_h < 8.0 {
+        return Err(format!(
+            "invalid ROI {}x{} at ({:.0},{:.0})",
+            roi_w, roi_h, roi_x, roi_y
+        ));
     }
 
-    let raw_words = run_ocr(&tmp);
-    let _ = std::fs::remove_file(&tmp);
-    let raw_words = raw_words?;
+    eprintln!(
+        "[typoscope ocr] ROI=({:.0},{:.0},{:.0},{:.0}) mouse=({:.0},{:.0}) screen={:.0}x{:.0}",
+        roi_x, roi_y, roi_w, roi_h, mouse_x, mouse_y, screen_w, screen_h
+    );
 
-    // screencapture PNGs are typically in physical pixels on Retina.
+    // Hide overlay so masks/underlay are not OCR'd.
+    let _ = window.hide();
+    thread::sleep(Duration::from_millis(20));
+
+    let debug_path = PathBuf::from(DEBUG_PNG);
+    let capture_size = capture_roi_png(roi_x, roi_y, roi_w, roi_h, &debug_path);
+    let _ = window.show();
+    let (cap_w, cap_h) = capture_size?;
+
+    eprintln!(
+        "[typoscope ocr] captured {} ({}x{})",
+        debug_path.display(),
+        cap_w,
+        cap_h
+    );
+
+    let output = Command::new(ocr_helper_path())
+        .arg(&debug_path)
+        .output()
+        .map_err(|e| format!("ocr helper failed to start: {e}"))?;
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for line in stderr.lines() {
+        eprintln!("[typoscope ocr] {line}");
+    }
+
+    if !output.status.success() {
+        let err = stderr.trim();
+        return Err(if err.is_empty() {
+            "ocr helper failed".into()
+        } else {
+            err.to_string()
+        });
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let raw_words: Vec<WordBox> =
+        serde_json::from_str(stdout.trim()).map_err(|e| format!("ocr json parse: {e}"))?;
+
+    let mut px_per_point = if cap_w > 0 {
+        cap_w as f64 / roi_w
+    } else {
+        scale
+    };
+    if let Some(meta_line) = stderr.lines().find(|l| l.starts_with("OCR_META ")) {
+        if let Ok(meta) = serde_json::from_str::<CaptureMeta>(&meta_line["OCR_META ".len()..]) {
+            if let Some(iw) = meta.image_width {
+                if iw > 0 {
+                    px_per_point = iw as f64 / roi_w;
+                }
+            }
+            eprintln!(
+                "[typoscope ocr] vision words={} image={}x{}",
+                meta.word_count.unwrap_or(raw_words.len() as i32),
+                meta.image_width.unwrap_or(0),
+                meta.image_height.unwrap_or(0)
+            );
+        }
+    }
+
     let origin = window.outer_position().map_err(|e| e.to_string())?;
     let origin_x = origin.x as f64 / scale;
     let origin_y = origin.y as f64 / scale;
@@ -185,31 +257,16 @@ fn capture_and_snap(window: &WebviewWindow) -> Result<Option<SnapRect>, String> 
         .map(|w| WordBox {
             text: w.text,
             confidence: w.confidence,
-            x: roi_x + w.x / scale - origin_x,
-            y: roi_y + w.y / scale - origin_y,
-            width: w.width / scale,
-            height: w.height / scale,
+            x: roi_x + w.x / px_per_point - origin_x,
+            y: roi_y + w.y / px_per_point - origin_y,
+            width: w.width / px_per_point,
+            height: w.height / px_per_point,
         })
         .collect();
 
     let cursor_local_x = mouse_x - origin_x;
     let cursor_local_y = mouse_y - origin_y;
     Ok(compute_snap_rect(&words, cursor_local_x, cursor_local_y))
-}
-
-fn run_ocr(image_path: &PathBuf) -> Result<Vec<WordBox>, String> {
-    let output = Command::new(ocr_helper_path())
-        .arg(image_path)
-        .output()
-        .map_err(|e| format!("ocr helper failed: {e}"))?;
-
-    if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("ocr helper error: {err}"));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    serde_json::from_str(stdout.trim()).map_err(|e| format!("ocr json parse: {e}"))
 }
 
 pub fn compute_snap_rect(words: &[WordBox], cursor_x: f64, cursor_y: f64) -> Option<SnapRect> {

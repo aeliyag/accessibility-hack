@@ -35,7 +35,6 @@ func recognizeWords(in image: CGImage) throws -> [WordBox] {
     for observation in observations {
         guard let candidate = observation.topCandidates(1).first else { continue }
         let text = candidate.string
-        // Prefer whitespace-separated word ranges when available.
         var didAddWord = false
 
         text.enumerateSubstrings(in: text.startIndex..<text.endIndex, options: [.byWords]) { _, substringRange, _, _ in
@@ -76,7 +75,6 @@ struct PixelRect {
 }
 
 func normalizedToTopLeftPixels(_ box: CGRect, width: Double, height: Double) -> PixelRect {
-    // Vision: origin bottom-left, normalized 0...1
     let x = box.origin.x * width
     let w = box.size.width * width
     let h = box.size.height * height
@@ -91,12 +89,16 @@ guard CommandLine.arguments.count >= 2 else {
 
 let path = CommandLine.arguments[1]
 guard let image = loadCGImage(path: path) else {
-    fputs("failed to load image\n", stderr)
+    fputs("failed to load image at \(path)\n", stderr)
     exit(1)
 }
 
 do {
     let words = try recognizeWords(in: image)
+    fputs(
+        "OCR_META {\"imageWidth\":\(image.width),\"imageHeight\":\(image.height),\"wordCount\":\(words.count),\"path\":\"\(path)\"}\n",
+        stderr
+    )
     let data = try JSONEncoder().encode(words)
     if let json = String(data: data, encoding: .utf8) {
         print(json)
