@@ -1,18 +1,21 @@
 import { load } from "@tauri-apps/plugin-store";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  DEFAULT_SETTINGS,
+  createDefaultSettings,
+  migrateSettings,
   STORE_FILE,
+  type LegacyTyposcopeSettings,
   type TyposcopeSettings,
 } from "../lib/settings";
 import { isTauri } from "../lib/isTauri";
 
-function mergeSettings(partial: Partial<TyposcopeSettings>): TyposcopeSettings {
-  return { ...DEFAULT_SETTINGS, ...partial };
-}
-
 export function useTyposcopeSettings() {
-  const [settings, setSettings] = useState<TyposcopeSettings>(DEFAULT_SETTINGS);
+  const [settings, setSettings] = useState<TyposcopeSettings>(() =>
+    createDefaultSettings(
+      typeof window !== "undefined" ? window.innerWidth : 1440,
+      typeof window !== "undefined" ? window.innerHeight : 900,
+    ),
+  );
   const [loaded, setLoaded] = useState(!isTauri());
   const saveTimer = useRef<number | undefined>(undefined);
 
@@ -25,9 +28,9 @@ export function useTyposcopeSettings() {
 
     void (async () => {
       const store = await load(STORE_FILE);
-      const saved = await store.get<Partial<TyposcopeSettings>>("settings");
+      const saved = await store.get<LegacyTyposcopeSettings>("settings");
       if (!cancelled && saved) {
-        setSettings(mergeSettings(saved));
+        setSettings(migrateSettings(saved));
       }
       if (!cancelled) {
         setLoaded(true);
