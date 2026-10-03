@@ -17,6 +17,7 @@
     "core:window:allow-hide",
     "core:window:allow-is-visible",
     "core:window:allow-primary-monitor",
-    "allow-ocr-snap"
+    "allow-ocr-snap",
+    "allow-speech"
   ]
 }

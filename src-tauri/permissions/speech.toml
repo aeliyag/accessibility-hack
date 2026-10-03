@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-speech"
+description = "Slit capture and text-to-speech commands"
+commands.allow = ["capture_slit", "speak_text"]
