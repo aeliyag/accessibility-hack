@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   TyposcopeOverlay,
   type SlitRect,
@@ -31,7 +31,6 @@ const MODE_KEYS: Record<string, SnapMode> = {
   w: "word",
   l: "line",
   s: "sentence",
-  p: "paragraph",
 };
 
 function App() {
@@ -43,6 +42,8 @@ function App() {
     {},
   );
   const { settings, loaded, updateSettings } = useTyposcopeSettings();
+  const snapModeRef = useRef(settings.snapMode);
+  snapModeRef.current = settings.snapMode;
   const localMouse = useMousePosition();
   const globalMouse = useGlobalMouse(overlayMode && loaded);
   const mouse = overlayMode ? globalMouse : localMouse;
@@ -115,7 +116,7 @@ function App() {
           ...current,
           autoSnap: !current.autoSnap,
         }));
-      } else if (!isRepeat && (key === "w" || key === "l" || key === "s" || key === "p" || key === "m")) {
+      } else if (!isRepeat && (key === "w" || key === "l" || key === "s" || key === "m")) {
         // Snap-mode hotkeys only while auto-snap is on.
         updateSettings((current) => {
           if (!current.autoSnap) {
@@ -151,8 +152,8 @@ function App() {
       return;
     }
 
-    void invoke("set_auto_snap", { enabled: settings.autoSnap }).catch(() => {
-      /* command unavailable off-macOS */
+    void invoke("set_auto_snap", { enabled: settings.autoSnap }).catch((error) => {
+      setSnapError(String(error));
     });
 
     if (!settings.autoSnap) {
@@ -167,8 +168,10 @@ function App() {
       return;
     }
 
-    void invoke("set_snap_mode", { mode: settings.snapMode }).catch(() => {
-      /* command unavailable off-macOS */
+    setSnapTarget(null);
+    setSnapMeta({});
+    void invoke("set_snap_mode", { mode: settings.snapMode }).catch((error) => {
+      setSnapError(String(error));
     });
   }, [loaded, overlayMode, settings.snapMode]);
 
@@ -182,19 +185,23 @@ function App() {
     let unlistenClear: (() => void) | undefined;
 
     void listen<
-      SlitRect & { word_count?: number; source?: string; latency_ms?: number }
+      SlitRect & { word_count?: number; source?: string; latency_ms?: number; mode?: SnapMode }
     >("ocr-snap-rect", ({ payload }) => {
+      if (payload.mode && payload.mode !== snapModeRef.current) return;
       setSnapTarget({
         x: payload.x,
         y: payload.y,
         width: payload.width,
         height: payload.height,
+        bands: payload.bands,
       });
       setSnapMeta({
         source: payload.source,
         latencyMs: payload.latency_ms,
       });
-      setSnapError(null);
+      if (payload.source === "cache" && (payload.word_count ?? 0) > 0) {
+        setSnapError(null);
+      }
     }).then((cleanup) => {
       unlistenRect = cleanup;
     });
@@ -313,7 +320,7 @@ function App() {
           <p>
             Auto-snap: {settings.autoSnap ? "ON" : "off"} · Mode:{" "}
             {settings.snapMode}
-            {settings.autoSnap ? " · W word · L line · S sentence · P paragraph · M cycle" : ""}
+            {settings.autoSnap ? " · W word · L line · S sentence · M cycle" : ""}
           </p>
           {snapRect && (
             <p>

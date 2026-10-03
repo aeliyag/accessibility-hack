@@ -2,14 +2,11 @@ import { load } from "@tauri-apps/plugin-store";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   DEFAULT_SETTINGS,
+  mergeSettings,
   STORE_FILE,
   type TyposcopeSettings,
 } from "../lib/settings";
 import { isTauri } from "../lib/isTauri";
-
-function mergeSettings(partial: Partial<TyposcopeSettings>): TyposcopeSettings {
-  return { ...DEFAULT_SETTINGS, ...partial };
-}
 
 export function useTyposcopeSettings() {
   const [settings, setSettings] = useState<TyposcopeSettings>(DEFAULT_SETTINGS);

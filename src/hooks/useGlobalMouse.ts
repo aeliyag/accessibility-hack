@@ -9,9 +9,10 @@ async function toWindowPoint(x: number, y: number): Promise<Point> {
   const scaleFactor = await appWindow.scaleFactor();
   const origin = await appWindow.outerPosition();
 
+  // The backend emits logical screen points on every platform.
   return {
-    x: x / scaleFactor - origin.x / scaleFactor,
-    y: y / scaleFactor - origin.y / scaleFactor,
+    x: x - origin.x / scaleFactor,
+    y: y - origin.y / scaleFactor,
   };
 }
 

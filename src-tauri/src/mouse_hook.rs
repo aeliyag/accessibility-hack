@@ -25,12 +25,18 @@ pub fn start_global_mouse_stream(window: WebviewWindow) {
 
             if let Some(ref state) = device_state {
                 let (x, y) = state.get_mouse().coords;
+                // macOS CGEventGetLocation already returns logical screen points.
+                // Normalize the physical device_query coordinates on other platforms.
+                #[cfg(target_os = "macos")]
+                let mouse_scale = 1.0;
+                #[cfg(not(target_os = "macos"))]
+                let mouse_scale = window.scale_factor().unwrap_or(1.0);
                 if window
                     .emit(
                         "device-mouse-move",
                         MousePos {
-                            x: x as f64,
-                            y: y as f64,
+                            x: x as f64 / mouse_scale,
+                            y: y as f64 / mouse_scale,
                         },
                     )
                     .is_err()
@@ -58,7 +64,6 @@ pub fn start_global_mouse_stream(window: WebviewWindow) {
                         Keycode::W => Some("w"),
                         Keycode::L => Some("l"),
                         Keycode::S => Some("s"),
-                        Keycode::P => Some("p"),
                         Keycode::M => Some("m"),
                         _ => None,
                     };

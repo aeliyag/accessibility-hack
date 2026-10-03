@@ -32,15 +32,6 @@ impl SnapMode {
             _ => SnapMode::Line,
         }
     }
-
-    pub fn cycle(self) -> Self {
-        match self {
-            SnapMode::Line => SnapMode::Word,
-            SnapMode::Word => SnapMode::Sentence,
-            SnapMode::Sentence => SnapMode::Paragraph,
-            SnapMode::Paragraph => SnapMode::Line,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -166,11 +157,91 @@ pub fn cluster_lines(words: &[WordBox]) -> Vec<LineCluster> {
             words: vec![word.clone()],
         });
     }
-    for line in &mut lines {
-        line.words
-            .sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
+    // Estimate a space from ordinary inter-word gaps in this text, rather than
+    // assuming tab pixels are fixed across fonts/zoom levels. A >4-space gap
+    // ends the horizontal run; reading then continues on the next line.
+    let mut spaces = Vec::new();
+    let mut glyph_widths = Vec::new();
+    for row in &mut lines {
+        row.words.sort_by(|a, b| a.x.total_cmp(&b.x));
+        for pair in row.words.windows(2) {
+            let gap = pair[1].x - pair[0].x - pair[0].width;
+            if gap > 0.5 && gap <= median_h {
+                spaces.push(gap);
+            }
+        }
+        for word in &row.words {
+            glyph_widths.push(word.width / word.text.chars().count().max(1) as f64);
+        }
     }
-    lines
+    spaces.sort_by(f64::total_cmp);
+    glyph_widths.sort_by(f64::total_cmp);
+    let fallback = glyph_widths
+        .get(glyph_widths.len() / 2)
+        .copied()
+        .unwrap_or(median_h / 2.0)
+        * 0.55;
+    let space = spaces
+        .get(spaces.len().saturating_sub(1) / 2)
+        .copied()
+        .unwrap_or(fallback)
+        .max(1.0);
+    let mut segments = Vec::new();
+    for mut row in lines {
+        row.words.sort_by(|a, b| a.x.total_cmp(&b.x));
+        let gap_limit = 4.0 * space * ((row.bottom - row.top) / median_h).max(0.75);
+        let mut group: Vec<WordBox> = Vec::new();
+        for word in row.words {
+            if group
+                .last()
+                .map(|prev| word.x - prev.x - prev.width > gap_limit)
+                .unwrap_or(false)
+            {
+                segments.push(make_line(std::mem::take(&mut group)));
+            }
+            group.push(word);
+        }
+        if !group.is_empty() {
+            segments.push(make_line(group));
+        }
+    }
+    // Western reading order: complete one aligned column top-to-bottom before
+    // moving right. This keeps article body text out of sidebar sentences.
+    segments.sort_by(|a, b| a.cy.total_cmp(&b.cy));
+    let mut columns: Vec<(f64, Vec<LineCluster>)> = Vec::new();
+    for line in segments {
+        let left = line.words[0].x;
+        let tolerance = (median_h * 2.5).max(40.0);
+        let nearest = columns
+            .iter()
+            .enumerate()
+            .filter(|(_, (x, _))| (left - x).abs() <= tolerance)
+            .min_by(|(_, (a, _)), (_, (b, _))| (left - a).abs().total_cmp(&(left - b).abs()))
+            .map(|(i, _)| i);
+        if let Some(i) = nearest {
+            columns[i].0 = columns[i].0.min(left);
+            columns[i].1.push(line);
+        } else {
+            columns.push((left, vec![line]));
+        }
+    }
+    columns.sort_by(|a, b| a.0.total_cmp(&b.0));
+    columns.into_iter().flat_map(|(_, lines)| lines).collect()
+}
+
+fn make_line(words: Vec<WordBox>) -> LineCluster {
+    let cy = words.iter().map(|w| w.y + w.height / 2.0).sum::<f64>() / words.len() as f64;
+    let top = words.iter().map(|w| w.y).fold(f64::INFINITY, f64::min);
+    let bottom = words
+        .iter()
+        .map(|w| w.y + w.height)
+        .fold(f64::NEG_INFINITY, f64::max);
+    LineCluster {
+        words,
+        cy,
+        top,
+        bottom,
+    }
 }
 
 fn reading_order<'a>(lines: &'a [LineCluster]) -> Vec<(usize, usize, &'a WordBox)> {
@@ -202,11 +273,17 @@ pub fn dist_to_rect(cx: f64, cy: f64, x: f64, y: f64, w: f64, h: f64) -> f64 {
     (dx * dx + dy * dy).sqrt()
 }
 
-/// Distance from cursor to a unit. Uses the outer AABB so multi-line
-/// sentences/paragraphs stay active while the cursor traverses between lines
-/// (band gaps must not count as "blank").
+/// Hit-test actual text bands. The outer bounding box includes other sentences
+/// before/after a wrapped sentence and must not capture their pointer events.
 pub fn dist_to_unit(unit: &UnitRect, cx: f64, cy: f64) -> f64 {
-    dist_to_rect(cx, cy, unit.x, unit.y, unit.width, unit.height)
+    if unit.bands.is_empty() {
+        dist_to_rect(cx, cy, unit.x, unit.y, unit.width, unit.height)
+    } else {
+        unit.bands
+            .iter()
+            .map(|&(x, y, w, h)| dist_to_rect(cx, cy, x, y, w, h))
+            .fold(f64::INFINITY, f64::min)
+    }
 }
 
 pub fn cursor_near_unit(unit: &UnitRect, cx: f64, cy: f64, margin: f64) -> bool {
@@ -291,7 +368,12 @@ fn bands_from_words(words: &[&WordBox], lines: &[LineCluster]) -> Vec<(f64, f64,
                 .iter()
                 .map(|w| w.y + w.height)
                 .fold(f64::NEG_INFINITY, f64::max);
-            Some((left - 6.0, top - 2.0, (right - left + 12.0).max(4.0), (bottom - top + 4.0).max(4.0)))
+            Some((
+                left - 6.0,
+                top - 2.0,
+                (right - left + 12.0).max(4.0),
+                (bottom - top + 4.0).max(4.0),
+            ))
         })
         .collect()
 }
@@ -309,7 +391,14 @@ fn looks_like_abbreviation(token: &str) -> bool {
         return true;
     }
     // Single capital letter initials: "A." / "U.S." handled via dots count
-    if t.len() == 1 && t.chars().next().unwrap().is_alphabetic() {
+    if t.len() == 1
+        && token
+            .trim_start_matches(is_edge_punct)
+            .chars()
+            .next()
+            .map(|c| c.is_uppercase())
+            .unwrap_or(false)
+    {
         return true;
     }
     false
@@ -334,7 +423,7 @@ fn token_ends_sentence(token: &str) -> bool {
     if trimmed.is_empty() {
         return false;
     }
-    if looks_like_abbreviation(trimmed) || is_decimal_number(trimmed) {
+    if looks_like_abbreviation(trimmed) {
         return false;
     }
     // Strip trailing closers after terminator: ."  ?)  !]
@@ -346,93 +435,79 @@ fn token_ends_sentence(token: &str) -> bool {
             break;
         }
     }
+    // A decimal has internal periods, never a final sentence period.
+    let bare: String = chars.iter().collect();
+    if !matches!(chars.last(), Some('.' | '!' | '?')) && is_decimal_number(&bare) {
+        return false;
+    }
     matches!(chars.last(), Some('.' | '!' | '?'))
 }
 
 /// Split reading-order words into sentence spans (inclusive index ranges into `order`).
 pub fn segment_sentences(lines: &[LineCluster]) -> Vec<std::ops::Range<usize>> {
     let order = reading_order(lines);
-    if order.is_empty() {
-        return Vec::new();
-    }
-
-    let has_terminator = order.iter().any(|(_, _, w)| token_ends_sentence(&w.text));
-    if !has_terminator {
-        // OCR often drops `.`/`!`/`?`. Fall back to one sentence per line so S mode
-        // still visibly snaps instead of swallowing the whole ROI.
-        let mut spans = Vec::new();
-        let mut start = 0usize;
-        for (i, (li, wi, _)) in order.iter().enumerate() {
-            let line_end = *wi + 1 >= lines[*li].words.len();
-            if line_end {
+    let mut spans = Vec::new();
+    let mut offset = 0;
+    for paragraph in segment_paragraphs(lines) {
+        let count: usize = lines[paragraph].iter().map(|l| l.words.len()).sum();
+        let end = offset + count;
+        let mut start = offset;
+        for i in offset..end {
+            if token_ends_sentence(&order[i].2.text) {
                 spans.push(start..i + 1);
                 start = i + 1;
             }
         }
-        if start < order.len() {
-            spans.push(start..order.len());
+        // Missing punctuation does not imply one sentence per visual line.
+        // Preserve the remaining visible paragraph fragment across line wraps.
+        if start < end {
+            spans.push(start..end);
         }
-        return spans;
-    }
-
-    let mut spans = Vec::new();
-    let mut start = 0usize;
-    for (i, (_, _, w)) in order.iter().enumerate() {
-        if token_ends_sentence(&w.text) {
-            spans.push(start..i + 1);
-            start = i + 1;
-        }
-    }
-    if start < order.len() {
-        spans.push(start..order.len());
+        offset = end;
     }
     spans
 }
 
-/// Paragraphs as contiguous line index ranges.
+/// Blank vertical space and first-line indentation delimit paragraphs. Columns
+/// have already been ordered separately by cluster_lines.
 pub fn segment_paragraphs(lines: &[LineCluster]) -> Vec<std::ops::Range<usize>> {
     if lines.is_empty() {
         return Vec::new();
     }
-    // Median inter-line gap (cy deltas).
-    let mut gaps: Vec<f64> = Vec::new();
-    for w in lines.windows(2) {
-        gaps.push((w[1].cy - w[0].cy).abs());
-    }
-    let median_gap = if gaps.is_empty() {
-        20.0
-    } else {
-        gaps.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        gaps[gaps.len() / 2]
-    };
-    // Blank line = noticeably bigger than normal leading.
-    let blank_thresh = (median_gap * 1.9).max(median_gap + 14.0);
-
-    let lefts: Vec<f64> = lines
-        .iter()
-        .map(|l| l.words.iter().map(|w| w.x).fold(f64::INFINITY, f64::min))
+    let left = |line: &LineCluster| line.words.first().map(|w| w.x).unwrap_or(0.0);
+    let height = |line: &LineCluster| line.bottom - line.top;
+    let mut gaps: Vec<f64> = lines
+        .windows(2)
+        .filter_map(|pair| {
+            let a = &pair[0];
+            let b = &pair[1];
+            let gap = b.top - a.bottom;
+            (gap >= 0.0 && (left(a) - left(b)).abs() <= 40.0).then_some(gap)
+        })
         .collect();
-    let block_left = lefts.iter().cloned().fold(f64::INFINITY, f64::min);
-    let indent_thresh = 22.0;
-
-    let mut paras = Vec::new();
-    let mut start = 0usize;
+    gaps.sort_by(f64::total_cmp);
+    // Use the lower median: blank paragraph gaps must not raise the baseline.
+    let normal_gap = gaps
+        .get(gaps.len().saturating_sub(1) / 2)
+        .copied()
+        .unwrap_or(0.0);
+    let mut spans = Vec::new();
+    let mut start = 0;
     for i in 1..lines.len() {
-        let gap = (lines[i].cy - lines[i - 1].cy).abs();
-        let blank = gap >= blank_thresh;
-        // First-line indent: this line jumps right vs the block's left edge and vs prior line.
-        let indent = lefts[i] >= block_left + indent_thresh
-            && lefts[i] >= lefts[i - 1] + indent_thresh * 0.75;
-        // Only treat large margin jumps as new blocks (avoid OCR jitter splitting every line).
-        let margin_shift = (lefts[i] - lefts[i - 1]).abs() >= 40.0;
-
-        if blank || indent || margin_shift {
-            paras.push(start..i);
+        let a = &lines[i - 1];
+        let b = &lines[i];
+        let h = height(a).min(height(b)).max(8.0);
+        let different_column = b.cy <= a.cy || (left(a) - left(b)).abs() > (h * 2.5).max(40.0);
+        let blank = b.top - a.bottom > normal_gap.min(h * 1.2) + (h * 0.65).max(7.0);
+        let indented = left(b) - left(&lines[start]) > (h * 1.1).max(16.0);
+        let font_break = height(a).max(height(b)) > h * 1.55;
+        if different_column || blank || indented || font_break {
+            spans.push(start..i);
             start = i;
         }
     }
-    paras.push(start..lines.len());
-    paras
+    spans.push(start..lines.len());
+    spans
 }
 
 fn finalize_near(unit: UnitRect, cx: f64, cy: f64, margin: f64) -> Option<UnitRect> {
@@ -485,16 +560,7 @@ pub fn select_unit_with_margin(
             )
         }
         SnapMode::Line => {
-            let li = lines
-                .iter()
-                .enumerate()
-                .min_by(|(_, a), (_, b)| {
-                    (a.cy - cy)
-                        .abs()
-                        .partial_cmp(&(b.cy - cy).abs())
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })?
-                .0;
+            let (li, _) = nearest_word_index(lines, cx, cy)?;
             let refs: Vec<&WordBox> = lines[li].words.iter().collect();
             let mut unit = union_boxes(&refs)?;
             unit.bands = bands_from_words(&refs, lines);
@@ -503,9 +569,7 @@ pub fn select_unit_with_margin(
         SnapMode::Sentence => {
             let order = reading_order(lines);
             let (li, wi) = nearest_word_index(lines, cx, cy)?;
-            let idx = order
-                .iter()
-                .position(|(l, w, _)| *l == li && *w == wi)?;
+            let idx = order.iter().position(|(l, w, _)| *l == li && *w == wi)?;
             let spans = segment_sentences(lines);
             let span = spans.into_iter().find(|r| r.contains(&idx))?;
             let words: Vec<&WordBox> = order[span].iter().map(|(_, _, w)| *w).collect();
@@ -514,16 +578,7 @@ pub fn select_unit_with_margin(
             finalize_near(unit, cx, cy, margin)
         }
         SnapMode::Paragraph => {
-            let li = lines
-                .iter()
-                .enumerate()
-                .min_by(|(_, a), (_, b)| {
-                    (a.cy - cy)
-                        .abs()
-                        .partial_cmp(&(b.cy - cy).abs())
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })?
-                .0;
+            let (li, _) = nearest_word_index(lines, cx, cy)?;
             let paras = segment_paragraphs(lines);
             let span = paras.into_iter().find(|r| r.contains(&li))?;
             let mut words: Vec<&WordBox> = Vec::new();
@@ -631,7 +686,7 @@ mod tests {
     }
 
     #[test]
-    fn sentence_without_terminators_falls_back_to_lines() {
+    fn sentence_without_terminators_preserves_wrapped_fragment() {
         let words = vec![
             w("Hello", 10.0, 10.0, 40.0, 14.0),
             w("there", 55.0, 10.0, 40.0, 14.0),
@@ -641,19 +696,10 @@ mod tests {
         let lines = cluster_lines(&words);
         assert_eq!(lines.len(), 2);
         let spans = segment_sentences(&lines);
-        assert_eq!(spans.len(), 2);
-        assert_eq!(spans[0].len(), 2);
-        assert_eq!(spans[1].len(), 2);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].len(), 4);
         let unit = select_unit(&lines, SnapMode::Sentence, 20.0, 12.0).unwrap();
-        assert_eq!(unit.word_count, 2);
-    }
-
-    #[test]
-    fn mode_cycle_order() {
-        assert_eq!(SnapMode::Line.cycle(), SnapMode::Word);
-        assert_eq!(SnapMode::Word.cycle(), SnapMode::Sentence);
-        assert_eq!(SnapMode::Sentence.cycle(), SnapMode::Paragraph);
-        assert_eq!(SnapMode::Paragraph.cycle(), SnapMode::Line);
+        assert_eq!(unit.word_count, 4);
     }
 
     #[test]
@@ -673,5 +719,123 @@ mod tests {
         // Between words but still near "Hello" edge should snap if within margin.
         let near = select_unit(&lines, SnapMode::Word, 52.0, 17.0);
         assert!(near.is_some());
+    }
+    #[test]
+    fn wrapped_sentence_selects_same_words_from_every_line() {
+        let lines = cluster_lines(&[
+            w("Earlier.", 10.0, 10.0, 55.0, 14.0),
+            w("This", 70.0, 10.0, 30.0, 14.0),
+            w("sentence", 10.0, 34.0, 60.0, 14.0),
+            w("continues", 75.0, 34.0, 65.0, 14.0),
+            w("here.”", 10.0, 58.0, 42.0, 14.0),
+            w("Next.", 57.0, 58.0, 40.0, 14.0),
+        ]);
+        for (x, y) in [(80.0, 17.0), (20.0, 41.0), (20.0, 65.0)] {
+            let unit = select_unit(&lines, SnapMode::Sentence, x, y).unwrap();
+            assert_eq!(unit.word_count, 4);
+            assert_eq!(unit.bands.len(), 3);
+            assert!(dist_to_unit(&unit, 20.0, 17.0) > 0.0);
+        }
+        assert_eq!(
+            select_unit(&lines, SnapMode::Sentence, 75.0, 65.0)
+                .unwrap()
+                .word_count,
+            1
+        );
+    }
+
+    #[test]
+    fn article_and_sidebar_sentences_do_not_merge() {
+        let lines = cluster_lines(&[
+            w("Body", 100.0, 10.0, 40.0, 14.0),
+            w("wraps", 145.0, 10.0, 40.0, 14.0),
+            w("here.", 100.0, 34.0, 40.0, 14.0),
+            w("Sidebar", 450.0, 10.0, 50.0, 14.0),
+            w("story.", 450.0, 34.0, 40.0, 14.0),
+        ]);
+        assert_eq!(
+            select_unit(&lines, SnapMode::Sentence, 110.0, 40.0)
+                .unwrap()
+                .word_count,
+            3
+        );
+        assert_eq!(
+            select_unit(&lines, SnapMode::Sentence, 465.0, 40.0)
+                .unwrap()
+                .word_count,
+            2
+        );
+    }
+
+    #[test]
+    fn sentence_never_crosses_blank_paragraph_boundary() {
+        let lines = cluster_lines(&[
+            w("Unfinished", 10.0, 10.0, 75.0, 14.0),
+            w("thought", 10.0, 30.0, 50.0, 14.0),
+            w("New", 10.0, 78.0, 25.0, 14.0),
+            w("paragraph.", 40.0, 78.0, 70.0, 14.0),
+        ]);
+        let units = segment_sentences(&lines);
+        assert_eq!(units, vec![0..2, 2..4]);
+    }
+
+    #[test]
+    fn decimal_at_sentence_end_and_closing_quotes() {
+        assert!(!token_ends_sentence("3.14"));
+        assert!(token_ends_sentence("3.14."));
+        assert!(token_ends_sentence("done!\""));
+        assert!(!token_ends_sentence("Dr."));
+    }
+
+    #[test]
+    fn gap_over_four_spaces_moves_to_next_line_not_sidebar() {
+        let lines = cluster_lines(&[
+            w("Read", 10.0, 10.0, 32.0, 14.0),
+            w("this", 47.0, 10.0, 32.0, 14.0),
+            w("Aside.", 105.0, 10.0, 40.0, 14.0), // 26px > four normal 5px spaces
+            w("next", 10.0, 34.0, 32.0, 14.0),
+            w("line", 47.0, 34.0, 32.0, 14.0),
+            w("end.", 84.0, 34.0, 32.0, 14.0),
+        ]);
+        let unit = select_unit(&lines, SnapMode::Sentence, 20.0, 17.0).unwrap();
+        assert_eq!(unit.word_count, 5);
+        assert_eq!(unit.bands.len(), 2);
+        assert_eq!(
+            select_unit(&lines, SnapMode::Sentence, 120.0, 17.0)
+                .unwrap()
+                .word_count,
+            1
+        );
+    }
+    #[test]
+    fn vision_fixture_selects_wrapped_sentences_at_every_screen_height() {
+        // Actual Vision output from an original synthetic 3024x1964 test page.
+        // Three copies of a 23-word paragraph at logical y=60,420,860.
+        let mut words: Vec<WordBox> =
+            serde_json::from_str(include_str!("../test-data/retina-ocr.json")).unwrap();
+        for word in &mut words {
+            word.x /= 2.0;
+            word.y /= 2.0;
+            word.width /= 2.0;
+            word.height /= 2.0;
+        }
+        let lines = cluster_lines(&words);
+        for top in [60.0, 420.0, 860.0] {
+            for line in [0.0, 26.0] {
+                let unit =
+                    select_unit(&lines, SnapMode::Sentence, 220.0, top + line + 8.0).unwrap();
+                assert_eq!(unit.word_count, 14, "first sentence y={top}, line={line}");
+                assert_eq!(unit.bands.len(), 2);
+            }
+            let paragraph = select_unit(&lines, SnapMode::Paragraph, 220.0, top + 60.0).unwrap();
+            assert_eq!(paragraph.word_count, 23, "paragraph y={top}");
+            assert_eq!(paragraph.bands.len(), 3);
+            assert_eq!(
+                select_unit(&lines, SnapMode::Sentence, 220.0, top + 60.0)
+                    .unwrap()
+                    .word_count,
+                9
+            );
+        }
     }
 }

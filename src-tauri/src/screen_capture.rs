@@ -1,14 +1,12 @@
 //! Screen ROI capture for OCR.
 //!
-//! Prefer in-process `CGWindowListCreateImage` (still present at runtime on
-//! macOS 15+ even though the Swift SDK marks it unavailable). Fall back to
-//! `/usr/sbin/screencapture -R` with top-left point coordinates.
+//! In-process `CGWindowListCreateImage` with global top-left logical coordinates.
+//! Capture errors are surfaced; capturing our own overlay is never a fallback.
 //!
 //! Pass `below_window_id` (NSWindow.windowNumber) to capture only content
 //! *under* the overlay so we never need to hide/show the panel.
 
 use std::path::Path;
-use std::process::Command;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CaptureOptions {
@@ -26,15 +24,9 @@ pub fn capture_roi_png(
     dest: &Path,
     opts: CaptureOptions,
 ) -> Result<(u32, u32), String> {
-    match capture_roi_cg(roi_x, roi_y, roi_w, roi_h, dest, opts) {
-        Ok(size) => Ok(size),
-        Err(cg_err) => {
-            // screencapture cannot exclude our window; only use as last resort.
-            capture_roi_screencapture(roi_x, roi_y, roi_w, roi_h, dest).map_err(|sc_err| {
-                format!("cg capture failed ({cg_err}); screencapture failed ({sc_err})")
-            })
-        }
-    }
+    // A fallback desktop screenshot includes our opaque mask and corrupts OCR.
+    // Surface permission/capture failures instead of feeding the overlay to Vision.
+    capture_roi_cg(roi_x, roi_y, roi_w, roi_h, dest, opts)
 }
 
 /// Tiny fingerprint of a ROI for cheap content-change detection (no PNG write).
@@ -96,6 +88,7 @@ fn capture_roi_cg(
 
         CGImageDestinationAddImage(dest_ref, image, std::ptr::null());
         let ok = CGImageDestinationFinalize(dest_ref) != 0;
+        CFRelease(dest_ref);
         CGImageRelease(image);
 
         if !ok {
@@ -173,11 +166,11 @@ fn create_cg_image(
         },
     };
 
-    // kCGWindowListOptionOnScreenOnly = 1
-    // kCGWindowListOptionOnScreenBelowWindow = 2
+    const ON_SCREEN_ONLY: u32 = 1 << 0;
+    const ON_SCREEN_BELOW_WINDOW: u32 = 1 << 2;
     let (list_option, window_id) = match opts.below_window_id {
-        Some(id) => (2u32, id),
-        None => (1u32, 0u32),
+        Some(id) => (ON_SCREEN_BELOW_WINDOW, id),
+        None => (ON_SCREEN_ONLY, 0u32),
     };
     const IMAGE_BEST_RES: u32 = 8;
     const IMAGE_IGNORE_FRAMING: u32 = 1;
@@ -282,48 +275,4 @@ extern "C" {
     fn CFDataGetLength(theData: CFDataRef) -> isize;
     fn CFDataGetBytePtr(theData: CFDataRef) -> *const u8;
     static kCFAllocatorDefault: *const std::os::raw::c_void;
-}
-
-fn capture_roi_screencapture(
-    roi_x: f64,
-    roi_y: f64,
-    roi_w: f64,
-    roi_h: f64,
-    dest: &Path,
-) -> Result<(u32, u32), String> {
-    let region = format!(
-        "{},{},{},{}",
-        roi_x.round() as i32,
-        roi_y.round() as i32,
-        roi_w.round() as i32,
-        roi_h.round() as i32
-    );
-
-    let output = Command::new("screencapture")
-        .args(["-x", "-R", &region])
-        .arg(dest)
-        .output()
-        .map_err(|e| format!("screencapture spawn failed: {e}"))?;
-
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    if !output.status.success() {
-        return Err(if stderr.is_empty() {
-            format!("screencapture failed for rect {region}")
-        } else {
-            format!("screencapture: {stderr}")
-        });
-    }
-
-    if !dest.exists() {
-        return Err(format!(
-            "screencapture produced no file for rect {region}. {}",
-            if stderr.is_empty() {
-                "Grant Screen Recording to Typoscope / your terminal."
-            } else {
-                stderr.as_str()
-            }
-        ));
-    }
-
-    Ok((0, 0))
 }

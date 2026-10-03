@@ -23,6 +23,10 @@ It can help people with:
 - Settings persist across restarts
 - System tray for show / hide / quit (macOS runs as a background accessory app)
 
+## MVP scope
+
+The current MVP targets macOS on the primary display: free-follow reading, word snapping across the screen, and wrapped sentences within a text column. Paragraph snapping is disabled for this MVP; saved paragraph preferences fall back to word mode. OCR is macOS-only; the basic overlay remains available on other supported platforms.
+
 ## Keyboard shortcuts
 
 | Key | Action |
@@ -34,14 +38,14 @@ It can help people with:
 | T | Toggle overlay visibility |
 | D | Toggle debug HUD |
 | Shift+A | Toggle OCR auto-snap |
-| W / L / S / P | Set snap mode to word / line / sentence / paragraph (**only while auto-snap is on**) |
+| W / L / S | Set snap mode to word / line / sentence (**only while auto-snap is on**) |
 | M | Cycle snap modes (**only while auto-snap is on**) |
 
 ## Development
 
 ### Prerequisites
 
-- Node.js 18+
+- Node.js 22.12+ (required by Vite 8)
 - Rust stable (edition 2021)
 - macOS: Xcode Command Line Tools (for NSPanel overlay support)
 
@@ -66,7 +70,7 @@ Open http://localhost:1420 — uses local mouse tracking with a dark preview bac
 Full transparent overlay with global mouse and keyboard:
 
 ```bash
-npm run tauri dev
+npm run tauri -- dev
 ```
 
 **macOS permissions**
@@ -74,13 +78,47 @@ npm run tauri dev
 - **Accessibility** — global hotkeys (including Shift+A)
 - **Screen Recording** — OCR auto-snap (Shift+A) captures a region around the cursor
 
-**Shift+A** toggles OCR auto-snap. While it is on, the slit snaps to the unit under the cursor (word / line / sentence / paragraph). Over blank space, all modes show a stable default-sized box at the cursor (so auto-snap stays visually distinct from free-follow). Use **W / L / S / P** to pick a mode (or **M** to cycle).
+**Shift+A** toggles OCR auto-snap. While it is on, the slit snaps to the unit under the cursor (word / line / sentence). Over blank space, all modes show a stable default-sized box at the cursor (so auto-snap stays visually distinct from free-follow). Use **W / L / S** to pick a mode (or **M** to cycle).
+
+Word coordinates are mapped from captured image pixels into screen points, including Retina displays. OCR captures windows below the overlay; transparent/unreadable captures produce an error instead of silently reusing old word locations. Cached text near the scan anchor is checked for changes while hovering, so scrolling refreshes the selection without unrelated animation elsewhere repeatedly invalidating it.
+
+Entering unmapped text triggers a fresh scan even inside a cached image. Movement can schedule another scan as soon as the current one finishes (at least 100 ms between starts); stationary misses retry 250 ms after completion. A valid selection remains visible during refresh. A single missing OCR result is confirmed with another scan before releasing the selection, with a five-second maximum cache lifetime. Terminal `[typoscope ocr]` messages show scan reasons, raw/accepted word counts, and whether the current pointer matches.
+
+Sentence mode scans the **visible display** for context. Reading order is left to right, then down within the same text column. A horizontal gap greater than approximately **four normal spaces**, estimated from the detected font and word spacing, ends a line's text run instead of joining a sidebar. A line wrap alone does not end a sentence: `.`, `!`, and `?` delimit sentences, with common abbreviations and decimals handled separately. Blank vertical space and first-line indentation separate paragraphs. Text outside the visible screen cannot be included until it is scrolled into view.
+
+Wrapped sentences use an opening for each selected line, preserving the mask over unrelated text before and after the selection. Press **D** to see the active mode, `cache` versus `empty` status, and OCR errors.
+
+### Regression checks
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml --lib
+npm run build
+npm test
+```
+
+The Rust tests include actual Vision output from an original synthetic Retina-sized page with paragraphs near the top, middle, and bottom, plus punctuation, wrapped sentence, column-gap, and paragraph-boundary cases.
+
+
+### Manual MVP acceptance
+
+Use the built-in display and a browser article with wrapped sentences:
+
+- Enable auto-snap with **Shift+A**, then **W**. Check words near the top, middle, and bottom of the display.
+- Cross blank space into another paragraph; stop on text and confirm reacquisition after OCR completes.
+- Use **S** and hover each line of a wrapped sentence. Only that sentence's line segments should be exposed.
+- Leave the cursor on recognized text through multiple refreshes; check for unwanted cancellations.
+- Scroll, switch **W/S**, and toggle auto-snap; old geometry should be replaced or released.
+- Check tray show/hide/quit and repeat OCR from a copied built app with macOS permissions granted.
+
+Automated geometry and scheduling checks do not replace this live permission and interaction check.
 
 ### Production build
 
 ```bash
-npm run tauri build
+npm run tauri -- build
 ```
+
+On macOS, `build.rs` compiles the Swift OCR helper for the selected architecture and Tauri bundles it beside the app executable. The generated `src-tauri/binaries/` directory is ignored by Git. The app resolves the helper relative to itself, so OCR does not depend on the original build folder. Local builds are not a signed/notarized public release.
 
 ## Platform notes
 

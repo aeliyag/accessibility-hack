@@ -18,10 +18,25 @@ func loadCGImage(path: String) -> CGImage? {
     return CGImageSourceCreateImageAtIndex(source, 0, nil)
 }
 
+func hasVisiblePixels(_ image: CGImage) -> Bool {
+    let size = 32
+    var pixels = [UInt8](repeating: 0, count: size * size * 4)
+    return pixels.withUnsafeMutableBytes { buffer in
+        guard let context = CGContext(data: buffer.baseAddress, width: size, height: size,
+                                      bitsPerComponent: 8, bytesPerRow: size * 4,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: size, height: size))
+        return stride(from: 3, to: buffer.count, by: 4).contains { buffer[$0] != 0 }
+    }
+}
+
 func recognizeWords(in image: CGImage) throws -> [WordBox] {
     let request = VNRecognizeTextRequest()
     request.recognitionLevel = .accurate
     request.usesLanguageCorrection = false
+    // Full-display sentence scans must still recognize normal-sized body text.
+    request.minimumTextHeight = 0.004
 
     let handler = VNImageRequestHandler(cgImage: image, options: [:])
     try handler.perform([request])
@@ -37,8 +52,11 @@ func recognizeWords(in image: CGImage) throws -> [WordBox] {
         let text = candidate.string
         var didAddWord = false
 
-        text.enumerateSubstrings(in: text.startIndex..<text.endIndex, options: [.byWords]) { _, substringRange, _, _ in
-            guard let box = try? candidate.boundingBox(for: substringRange)?.boundingBox else { return }
+        // Keep punctuation attached to tokens: .byWords discards sentence endings.
+        // Substring indices belong to this same String, including Unicode text.
+        for token in text.split(whereSeparator: { $0.isWhitespace }) {
+            let substringRange = token.startIndex..<token.endIndex
+            guard let box = try? candidate.boundingBox(for: substringRange)?.boundingBox else { continue }
             let pixel = normalizedToTopLeftPixels(box, width: imgW, height: imgH)
             boxes.append(WordBox(
                 text: String(text[substringRange]),
@@ -90,6 +108,11 @@ guard CommandLine.arguments.count >= 2 else {
 let path = CommandLine.arguments[1]
 guard let image = loadCGImage(path: path) else {
     fputs("failed to load image at \(path)\n", stderr)
+    exit(1)
+}
+
+guard hasVisiblePixels(image) else {
+    fputs("capture is transparent — no readable windows; check Screen Recording permission for Typoscope / your terminal\n", stderr)
     exit(1)
 }
 

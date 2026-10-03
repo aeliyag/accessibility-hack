@@ -1,3 +1,4 @@
+import { useId } from "react";
 import "./TyposcopeOverlay.css";
 
 export interface SlitRect {
@@ -5,6 +6,8 @@ export interface SlitRect {
   y: number;
   width: number;
   height: number;
+  /** Per-line openings in window logical pixels, including wrapped sentences. */
+  bands?: [number, number, number, number][];
 }
 
 interface TyposcopeOverlayProps {
@@ -13,77 +16,40 @@ interface TyposcopeOverlayProps {
   maskOpacity: number;
   underlayColor: string;
   underlayOpacity: number;
-  /** When set, draws a bounded reading window (left/right masks). */
   slitRect?: SlitRect | null;
 }
 
 export function TyposcopeOverlay({
-  centerY,
-  slitHeight,
-  maskOpacity,
-  underlayColor,
-  underlayOpacity,
-  slitRect,
+  centerY, slitHeight, maskOpacity, underlayColor, underlayOpacity, slitRect,
 }: TyposcopeOverlayProps) {
-  const useRect = slitRect && slitRect.width > 0 && slitRect.height > 0;
-  const slitTop = useRect
-    ? Math.max(0, slitRect.y)
-    : Math.max(0, centerY - slitHeight / 2);
-  const height = useRect ? slitRect.height : slitHeight;
-  const slitBottom = slitTop + height;
-  const slitLeft = useRect ? Math.max(0, slitRect.x) : 0;
-  const width = useRect ? slitRect.width : undefined;
+  const id = useId().replace(/:/g, "");
+  const maskId = `reading-mask-${id}`;
+  const clipId = `reading-bands-${id}`;
+  const bounded = slitRect && slitRect.width > 0 && slitRect.height > 0;
+  const bands = bounded ? slitRect.bands?.filter((b) => b.every(Number.isFinite) && b[2] > 0 && b[3] > 0) : undefined;
+  const openings: { x: number; y: number; width: number | string; height: number }[] =
+    bands?.length
+      ? bands.map(([x, y, width, height]) => ({ x, y, width, height }))
+      : bounded
+        ? [{ x: slitRect.x, y: slitRect.y, width: slitRect.width, height: slitRect.height }]
+        : [{ x: 0, y: Math.max(0, centerY - slitHeight / 2), width: "100%", height: slitHeight }];
 
   return (
     <div className="typoscope" aria-hidden="true">
-      <div
-        className="typoscope__mask typoscope__mask--top"
-        style={{
-          height: `${slitTop}px`,
-          backgroundColor: `rgba(0, 0, 0, ${maskOpacity})`,
-        }}
-      />
-      {useRect && (
-        <>
-          <div
-            className="typoscope__mask typoscope__mask--left"
-            style={{
-              top: `${slitTop}px`,
-              height: `${height}px`,
-              width: `${slitLeft}px`,
-              backgroundColor: `rgba(0, 0, 0, ${maskOpacity})`,
-            }}
-          />
-          <div
-            className="typoscope__mask typoscope__mask--right"
-            style={{
-              top: `${slitTop}px`,
-              height: `${height}px`,
-              left: `${slitLeft + (width ?? 0)}px`,
-              backgroundColor: `rgba(0, 0, 0, ${maskOpacity})`,
-            }}
-          />
-        </>
-      )}
-      <div
-        className="typoscope__slit"
-        style={{
-          top: `${slitTop}px`,
-          height: `${height}px`,
-          left: useRect ? `${slitLeft}px` : 0,
-          width: useRect ? `${width}px` : undefined,
-          right: useRect ? "auto" : 0,
-          backgroundColor: underlayColor,
-          opacity: underlayOpacity,
-        }}
-      />
-      <div
-        className="typoscope__mask typoscope__mask--bottom"
-        style={{
-          top: `${slitBottom}px`,
-          backgroundColor: `rgba(0, 0, 0, ${maskOpacity})`,
-        }}
-      />
+      <svg className="typoscope__surface" width="100%" height="100%">
+        <defs>
+          <mask id={maskId} x="0" y="0" width="100%" height="100%"
+            maskUnits="userSpaceOnUse" style={{ maskType: "luminance" }}>
+            <rect width="100%" height="100%" fill="white" />
+            {openings.map((band, i) => <rect key={i} {...band} fill="black" />)}
+          </mask>
+          <clipPath id={clipId} clipPathUnits="userSpaceOnUse">
+            {openings.map((band, i) => <rect key={i} {...band} />)}
+          </clipPath>
+        </defs>
+        <rect width="100%" height="100%" fill="black" opacity={maskOpacity} mask={`url(#${maskId})`} />
+        <rect width="100%" height="100%" fill={underlayColor} opacity={underlayOpacity} clipPath={`url(#${clipId})`} />
+      </svg>
     </div>
   );
 }

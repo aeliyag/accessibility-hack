@@ -5,42 +5,8 @@
   z-index: 1;
 }
 
-.typoscope__mask {
-  position: absolute;
-  left: 0;
-  right: 0;
+.typoscope__surface {
+  display: block;
+  overflow: hidden;
   pointer-events: none;
-}
-
-.typoscope__mask--top {
-  top: 0;
-}
-
-.typoscope__mask--bottom {
-  bottom: 0;
-}
-
-.typoscope__mask--left {
-  left: 0;
-  right: auto;
-}
-
-.typoscope__mask--right {
-  right: 0;
-}
-
-.typoscope__slit {
-  position: absolute;
-  left: 0;
-  right: 0;
-  pointer-events: none;
-  box-shadow:
-    inset 0 2px 0 rgba(255, 255, 255, 0.25),
-    inset 0 -2px 0 rgba(255, 255, 255, 0.25);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .typoscope__slit {
-    transition: none;
-  }
 }

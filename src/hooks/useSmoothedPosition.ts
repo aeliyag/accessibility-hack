@@ -20,7 +20,12 @@ export function useSmoothedSnapRect(
 
     const animate = () => {
       const nextTarget = targetRef.current;
-      if (nextTarget) {
+      if (nextTarget?.bands?.length) {
+        // Line geometry is atomic. Interpolating different sentences or band
+        // counts exposes unrelated text between their start/end positions.
+        currentRef.current = nextTarget;
+        setRect(nextTarget);
+      } else if (nextTarget) {
         const current = currentRef.current ?? nextTarget;
         // Track position and size hard so the box follows the unit immediately.
         const posFactor = Math.min(1, factor + 0.08);
