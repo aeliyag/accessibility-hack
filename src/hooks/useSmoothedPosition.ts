@@ -22,9 +22,9 @@ export function useSmoothedSnapRect(
       const nextTarget = targetRef.current;
       if (nextTarget) {
         const current = currentRef.current ?? nextTarget;
-        // Track Y/X hard; ease width/height a bit so OCR size changes don't pop.
-        const posFactor = Math.min(1, factor + 0.15);
-        const sizeFactor = Math.max(0.35, factor - 0.15);
+        // Track position and size hard so the box follows the unit immediately.
+        const posFactor = Math.min(1, factor + 0.08);
+        const sizeFactor = Math.min(1, factor);
         const next: SlitRect = {
           x: current.x + (nextTarget.x - current.x) * posFactor,
           y: current.y + (nextTarget.y - current.y) * posFactor,
@@ -35,6 +35,9 @@ export function useSmoothedSnapRect(
         // Snap the last millimetre so we don't asymptotically lag.
         if (Math.abs(next.y - nextTarget.y) < 0.35) next.y = nextTarget.y;
         if (Math.abs(next.x - nextTarget.x) < 0.35) next.x = nextTarget.x;
+        if (Math.abs(next.width - nextTarget.width) < 0.5) next.width = nextTarget.width;
+        if (Math.abs(next.height - nextTarget.height) < 0.5)
+          next.height = nextTarget.height;
         currentRef.current = next;
         setRect(next);
       } else {

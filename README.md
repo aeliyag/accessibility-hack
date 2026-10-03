@@ -33,7 +33,9 @@ It can help people with:
 | 1 | Cycle underlay color presets |
 | T | Toggle overlay visibility |
 | D | Toggle debug HUD |
-| Shift+A | Toggle OCR auto word-snap |
+| Shift+A | Toggle OCR auto-snap |
+| W / L / S / P | Set snap mode to word / line / sentence / paragraph (**only while auto-snap is on**) |
+| M | Cycle snap modes (**only while auto-snap is on**) |
 
 ## Development
 
@@ -72,7 +74,7 @@ npm run tauri dev
 - **Accessibility** — global hotkeys (including Shift+A)
 - **Screen Recording** — OCR auto-snap (Shift+A) captures a region around the cursor
 
-**Shift+A** toggles OCR word-snap: the reading window sizes to the nearby text line.
+**Shift+A** toggles OCR auto-snap. While it is on, the slit snaps to the unit under the cursor (word / line / sentence / paragraph). Over blank space, all modes show a stable default-sized box at the cursor (so auto-snap stays visually distinct from free-follow). Use **W / L / S / P** to pick a mode (or **M** to cycle).
 
 ### Production build
 

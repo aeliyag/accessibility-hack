@@ -1,5 +1,6 @@
 mod mouse_hook;
 mod tray;
+mod snap_units;
 
 #[cfg(target_os = "macos")]
 mod ocr_snap;
@@ -32,6 +33,8 @@ pub fn run() {
         builder = builder.invoke_handler(tauri::generate_handler![
             ocr_snap::set_auto_snap,
             ocr_snap::get_auto_snap,
+            ocr_snap::set_snap_mode,
+            ocr_snap::get_snap_mode,
         ]);
     }
 

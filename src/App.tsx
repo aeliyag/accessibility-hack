@@ -13,7 +13,11 @@ import {
   useSmoothedSnapRect,
 } from "./hooks/useSmoothedPosition";
 import { useTyposcopeSettings } from "./hooks/useTyposcopeSettings";
-import { COLOR_PRESETS } from "./lib/settings";
+import {
+  COLOR_PRESETS,
+  cycleSnapMode,
+  type SnapMode,
+} from "./lib/settings";
 import { isTauri } from "./lib/isTauri";
 import "./App.css";
 
@@ -22,6 +26,13 @@ const MAX_SLIT_HEIGHT = 240;
 const SLIT_HEIGHT_STEP = 8;
 const OPACITY_STEP = 0.05;
 const NUDGE_STEP = 8;
+
+const MODE_KEYS: Record<string, SnapMode> = {
+  w: "word",
+  l: "line",
+  s: "sentence",
+  p: "paragraph",
+};
 
 function App() {
   const overlayMode = isTauri();
@@ -42,6 +53,7 @@ function App() {
   );
   const { rect: snapRect } = useSmoothedSnapRect(
     settings.autoSnap ? snapTarget : null,
+    0.92,
   );
 
   const applyControlKey = useCallback(
@@ -103,6 +115,18 @@ function App() {
           ...current,
           autoSnap: !current.autoSnap,
         }));
+      } else if (!isRepeat && (key === "w" || key === "l" || key === "s" || key === "p" || key === "m")) {
+        // Snap-mode hotkeys only while auto-snap is on.
+        updateSettings((current) => {
+          if (!current.autoSnap) {
+            return current;
+          }
+          if (key === "m") {
+            return { ...current, snapMode: cycleSnapMode(current.snapMode) };
+          }
+          const next = MODE_KEYS[key];
+          return next ? { ...current, snapMode: next } : current;
+        });
       }
     },
     [updateSettings],
@@ -137,6 +161,17 @@ function App() {
     }
   }, [loaded, overlayMode, settings.autoSnap]);
 
+  // Sync snap granularity into Rust.
+  useEffect(() => {
+    if (!overlayMode || !loaded) {
+      return;
+    }
+
+    void invoke("set_snap_mode", { mode: settings.snapMode }).catch(() => {
+      /* command unavailable off-macOS */
+    });
+  }, [loaded, overlayMode, settings.snapMode]);
+
   useEffect(() => {
     if (!overlayMode) {
       return;
@@ -144,6 +179,7 @@ function App() {
 
     let unlistenRect: (() => void) | undefined;
     let unlistenErr: (() => void) | undefined;
+    let unlistenClear: (() => void) | undefined;
 
     void listen<
       SlitRect & { word_count?: number; source?: string; latency_ms?: number }
@@ -169,9 +205,17 @@ function App() {
       unlistenErr = cleanup;
     });
 
+    void listen("ocr-snap-clear", () => {
+      setSnapTarget(null);
+      setSnapMeta({});
+    }).then((cleanup) => {
+      unlistenClear = cleanup;
+    });
+
     return () => {
       unlistenRect?.();
       unlistenErr?.();
+      unlistenClear?.();
     };
   }, [overlayMode]);
 
@@ -241,7 +285,13 @@ function App() {
             ↑/↓ nudge · G/H height · [/] opacity · 1 color · T toggle · Shift+A
             auto-snap · D debug
           </p>
-          <p>Auto-snap: {settings.autoSnap ? "ON (needs Tauri + Screen Recording)" : "off"}</p>
+          <p>
+            Auto-snap: {settings.autoSnap ? "ON" : "off"} · Mode:{" "}
+            {settings.snapMode}
+            {settings.autoSnap
+              ? " · W/L/S/P set mode · M cycle"
+              : " (enable Shift+A for W/L/S/P)"}
+          </p>
         </header>
       )}
 
@@ -260,7 +310,11 @@ function App() {
             Height: {settings.slitHeight}px · Opacity:{" "}
             {settings.maskOpacity.toFixed(2)}
           </p>
-          <p>Auto-snap: {settings.autoSnap ? "ON" : "off"}</p>
+          <p>
+            Auto-snap: {settings.autoSnap ? "ON" : "off"} · Mode:{" "}
+            {settings.snapMode}
+            {settings.autoSnap ? " · W word · L line · S sentence · P paragraph · M cycle" : ""}
+          </p>
           {snapRect && (
             <p>
               Snap: {Math.round(snapRect.x)},{Math.round(snapRect.y)}{" "}
@@ -293,10 +347,19 @@ function App() {
               <p>Slit Y: {Math.round(position.y)} (offset {settings.yOffset}px)</p>
               <p>Height: {settings.slitHeight}px</p>
               <p>Opacity: {settings.maskOpacity.toFixed(2)}</p>
-              <p>Auto-snap: {settings.autoSnap ? "ON" : "off"}</p>
+              <p>
+                Auto-snap: {settings.autoSnap ? "ON" : "off"} · Mode:{" "}
+                {settings.snapMode}
+              </p>
             </div>
           )}
         </>
+      )}
+
+      {overlayMode && settings.autoSnap && settings.visible && (
+        <div className="snap-mode-hud" aria-live="polite">
+          {settings.snapMode}
+        </div>
       )}
     </div>
   );

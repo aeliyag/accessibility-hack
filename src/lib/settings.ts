@@ -7,6 +7,15 @@ export const COLOR_PRESETS = [
   { underlayColor: "#000000", label: "Black" },
 ] as const;
 
+export type SnapMode = "line" | "word" | "sentence" | "paragraph";
+
+export const SNAP_MODES: SnapMode[] = ["line", "word", "sentence", "paragraph"];
+
+export function cycleSnapMode(mode: SnapMode): SnapMode {
+  const i = SNAP_MODES.indexOf(mode);
+  return SNAP_MODES[(i + 1) % SNAP_MODES.length];
+}
+
 export interface TyposcopeSettings {
   slitHeight: number;
   maskOpacity: number;
@@ -15,8 +24,10 @@ export interface TyposcopeSettings {
   visible: boolean;
   colorPresetIndex: number;
   yOffset: number;
-  /** OCR word-snap mode (Shift+A). */
+  /** OCR auto-snap (Shift+A). */
   autoSnap: boolean;
+  /** Snap granularity: line | word | sentence | paragraph */
+  snapMode: SnapMode;
 }
 
 export const DEFAULT_SETTINGS: TyposcopeSettings = {
@@ -28,6 +39,7 @@ export const DEFAULT_SETTINGS: TyposcopeSettings = {
   colorPresetIndex: 0,
   yOffset: 0,
   autoSnap: false,
+  snapMode: "line",
 };
 
 export const STORE_FILE = "typoscope-settings.json";

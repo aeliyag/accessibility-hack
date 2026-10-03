@@ -54,6 +54,12 @@ pub fn start_global_mouse_stream(window: WebviewWindow) {
                         Keycode::T => Some("t"),
                         Keycode::D => Some("d"),
                         Keycode::A if shift_held => Some("shifta"),
+                        // Snap-mode keys (App ignores these unless auto-snap is on).
+                        Keycode::W => Some("w"),
+                        Keycode::L => Some("l"),
+                        Keycode::S => Some("s"),
+                        Keycode::P => Some("p"),
+                        Keycode::M => Some("m"),
                         _ => None,
                     };
 
