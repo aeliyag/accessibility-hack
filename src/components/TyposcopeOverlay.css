@@ -20,6 +20,15 @@
   bottom: 0;
 }
 
+.typoscope__mask--left {
+  left: 0;
+  right: auto;
+}
+
+.typoscope__mask--right {
+  right: 0;
+}
+
 .typoscope__slit {
   position: absolute;
   left: 0;

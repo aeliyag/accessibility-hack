@@ -33,6 +33,7 @@ It can help people with:
 | 1 | Cycle underlay color presets |
 | T | Toggle overlay visibility |
 | D | Toggle debug HUD |
+| Shift+A | Toggle OCR auto word-snap |
 
 ## Development
 
@@ -65,6 +66,13 @@ Full transparent overlay with global mouse and keyboard:
 ```bash
 npm run tauri dev
 ```
+
+**macOS permissions**
+
+- **Accessibility** — global hotkeys (including Shift+A)
+- **Screen Recording** — OCR auto-snap (Shift+A) captures a region around the cursor
+
+**Shift+A** toggles OCR word-snap: the reading window sizes to the nearby text line.
 
 ### Production build
 

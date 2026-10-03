@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-ocr-snap"
+description = "Toggle OCR auto word-snap mode"
+commands.allow = ["set_auto_snap", "get_auto_snap"]

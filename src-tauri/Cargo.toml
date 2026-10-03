@@ -1,5 +1,6 @@
 [package]
 name = "typoscope"
+default-run = "typoscope"
 version = "0.1.0"
 description = "A transparent reading guide overlay"
 authors = ["aeliyagrover"]

@@ -15,6 +15,8 @@ export interface TyposcopeSettings {
   visible: boolean;
   colorPresetIndex: number;
   yOffset: number;
+  /** OCR word-snap mode (Shift+A). */
+  autoSnap: boolean;
 }
 
 export const DEFAULT_SETTINGS: TyposcopeSettings = {
@@ -25,6 +27,7 @@ export const DEFAULT_SETTINGS: TyposcopeSettings = {
   visible: true,
   colorPresetIndex: 0,
   yOffset: 0,
+  autoSnap: false,
 };
 
 export const STORE_FILE = "typoscope-settings.json";

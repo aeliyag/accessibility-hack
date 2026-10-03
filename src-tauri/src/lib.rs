@@ -2,6 +2,9 @@ mod mouse_hook;
 mod tray;
 
 #[cfg(target_os = "macos")]
+mod ocr_snap;
+
+#[cfg(target_os = "macos")]
 mod overlay_panel;
 
 #[cfg(not(target_os = "macos"))]
@@ -21,6 +24,19 @@ pub fn run() {
         builder = builder.plugin(tauri_nspanel::init());
     }
 
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.invoke_handler(tauri::generate_handler![
+            ocr_snap::set_auto_snap,
+            ocr_snap::get_auto_snap,
+        ]);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        builder = builder.invoke_handler(tauri::generate_handler![]);
+    }
+
     builder
         .setup(|app| {
             #[cfg(target_os = "macos")]
@@ -35,6 +51,10 @@ pub fn run() {
             overlay_window::configure(window.clone())?;
 
             start_global_mouse_stream(window);
+
+            #[cfg(target_os = "macos")]
+            ocr_snap::start_auto_snap_loop(app.handle().clone());
+
             tray::setup_tray(app.handle())?;
 
             Ok(())

@@ -1,10 +1,17 @@
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useState } from "react";
-import { TyposcopeOverlay } from "./components/TyposcopeOverlay";
+import {
+  TyposcopeOverlay,
+  type SlitRect,
+} from "./components/TyposcopeOverlay";
 import { useGlobalMouse } from "./hooks/useGlobalMouse";
 import { useMousePosition } from "./hooks/useMousePosition";
-import { useSmoothedPosition } from "./hooks/useSmoothedPosition";
+import {
+  useSmoothedPosition,
+  useSmoothedSnapRect,
+} from "./hooks/useSmoothedPosition";
 import { useTyposcopeSettings } from "./hooks/useTyposcopeSettings";
 import { COLOR_PRESETS } from "./lib/settings";
 import { isTauri } from "./lib/isTauri";
@@ -19,6 +26,8 @@ const NUDGE_STEP = 8;
 function App() {
   const overlayMode = isTauri();
   const [showDebug, setShowDebug] = useState(false);
+  const [snapTarget, setSnapTarget] = useState<SlitRect | null>(null);
+  const [snapError, setSnapError] = useState<string | null>(null);
   const { settings, loaded, updateSettings } = useTyposcopeSettings();
   const localMouse = useMousePosition();
   const globalMouse = useGlobalMouse(overlayMode && loaded);
@@ -27,6 +36,9 @@ function App() {
     mouse,
     settings.slitHeight,
     settings.yOffset,
+  );
+  const { rect: snapRect } = useSmoothedSnapRect(
+    settings.autoSnap ? snapTarget : null,
   );
 
   const applyControlKey = useCallback(
@@ -83,6 +95,11 @@ function App() {
         }));
       } else if (key === "d" && !isRepeat) {
         setShowDebug((value) => !value);
+      } else if (key === "shifta" && !isRepeat) {
+        updateSettings((current) => ({
+          ...current,
+          autoSnap: !current.autoSnap,
+        }));
       }
     },
     [updateSettings],
@@ -101,6 +118,54 @@ function App() {
     }
   }, [loaded, overlayMode, settings.visible]);
 
+  // Sync auto-snap flag into the Rust OCR loop.
+  useEffect(() => {
+    if (!overlayMode || !loaded) {
+      return;
+    }
+
+    void invoke("set_auto_snap", { enabled: settings.autoSnap }).catch(() => {
+      /* command unavailable off-macOS */
+    });
+
+    if (!settings.autoSnap) {
+      setSnapTarget(null);
+      setSnapError(null);
+    }
+  }, [loaded, overlayMode, settings.autoSnap]);
+
+  useEffect(() => {
+    if (!overlayMode) {
+      return;
+    }
+
+    let unlistenRect: (() => void) | undefined;
+    let unlistenErr: (() => void) | undefined;
+
+    void listen<SlitRect & { word_count?: number }>("ocr-snap-rect", ({ payload }) => {
+      setSnapTarget({
+        x: payload.x,
+        y: payload.y,
+        width: payload.width,
+        height: payload.height,
+      });
+      setSnapError(null);
+    }).then((cleanup) => {
+      unlistenRect = cleanup;
+    });
+
+    void listen<string>("ocr-snap-error", ({ payload }) => {
+      setSnapError(payload);
+    }).then((cleanup) => {
+      unlistenErr = cleanup;
+    });
+
+    return () => {
+      unlistenRect?.();
+      unlistenErr?.();
+    };
+  }, [overlayMode]);
+
   useEffect(() => {
     if (overlayMode) {
       return;
@@ -108,6 +173,12 @@ function App() {
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.metaKey || event.ctrlKey || event.altKey) {
+        return;
+      }
+
+      if (event.shiftKey && event.key.toLowerCase() === "a") {
+        event.preventDefault();
+        applyControlKey("shifta", event.repeat);
         return;
       }
 
@@ -138,6 +209,8 @@ function App() {
     return null;
   }
 
+  const showSnapSlit = settings.autoSnap && snapRect;
+
   return (
     <div className={`app ${overlayMode ? "app--overlay" : ""}`}>
       {settings.visible && (
@@ -147,6 +220,7 @@ function App() {
           maskOpacity={settings.maskOpacity}
           underlayColor={settings.underlayColor}
           underlayOpacity={settings.underlayOpacity}
+          slitRect={showSnapSlit ? snapRect : null}
         />
       )}
 
@@ -154,19 +228,37 @@ function App() {
         <header className="hud">
           <h1>Typoscope</h1>
           <p>Move your mouse to position the reading slit.</p>
-          <p>↑/↓ nudge · G/H height · [/] opacity · 1 color · T toggle · D debug</p>
+          <p>
+            ↑/↓ nudge · G/H height · [/] opacity · 1 color · T toggle · Shift+A
+            auto-snap · D debug
+          </p>
+          <p>Auto-snap: {settings.autoSnap ? "ON (needs Tauri + Screen Recording)" : "off"}</p>
         </header>
       )}
 
       {overlayMode && showDebug && (
         <div className="debug-panel debug-panel--overlay">
-          <p>Overlay mode — D debug · T toggle · G/H height · [/] opacity · 1 color</p>
+          <p>
+            Overlay — D debug · T toggle · Shift+A auto-snap · G/H height · [/]
+            opacity
+          </p>
           <p>
             Mouse:{" "}
             {mouse ? `${Math.round(mouse.x)}, ${Math.round(mouse.y)}` : "—"}
           </p>
           <p>Slit Y: {Math.round(position.y)} (offset {settings.yOffset}px)</p>
-          <p>Height: {settings.slitHeight}px · Opacity: {settings.maskOpacity.toFixed(2)}</p>
+          <p>
+            Height: {settings.slitHeight}px · Opacity:{" "}
+            {settings.maskOpacity.toFixed(2)}
+          </p>
+          <p>Auto-snap: {settings.autoSnap ? "ON" : "off"}</p>
+          {snapRect && (
+            <p>
+              Snap: {Math.round(snapRect.x)},{Math.round(snapRect.y)}{" "}
+              {Math.round(snapRect.width)}×{Math.round(snapRect.height)}
+            </p>
+          )}
+          {snapError && <p>OCR: {snapError}</p>}
           <p>Visible: {settings.visible ? "yes" : "no"}</p>
         </div>
       )}
@@ -188,6 +280,7 @@ function App() {
               <p>Slit Y: {Math.round(position.y)} (offset {settings.yOffset}px)</p>
               <p>Height: {settings.slitHeight}px</p>
               <p>Opacity: {settings.maskOpacity.toFixed(2)}</p>
+              <p>Auto-snap: {settings.autoSnap ? "ON" : "off"}</p>
             </div>
           )}
         </>
