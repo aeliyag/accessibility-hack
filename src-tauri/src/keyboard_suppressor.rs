@@ -1,0 +1,227 @@
+#[cfg(target_os = "macos")]
+mod macos {
+    use std::{
+        ffi::c_void,
+        ptr,
+        sync::{mpsc, mpsc::SyncSender, OnceLock},
+        thread,
+    };
+    use tauri::{Emitter, WebviewWindow};
+
+    type CGEventRef = *mut c_void;
+    type CFMachPortRef = *mut c_void;
+    type CFRunLoopRef = *mut c_void;
+    type CFRunLoopSourceRef = *mut c_void;
+
+    const KEY_DOWN: u32 = 10;
+    const KEY_UP: u32 = 11;
+    const AUTOREPEAT_FIELD: u32 = 8;
+    const KEYCODE_FIELD: u32 = 9;
+    const SHIFT_FLAG: u64 = 0x0002_0000;
+    const CONTROL_FLAG: u64 = 0x0004_0000;
+    const ALTERNATE_FLAG: u64 = 0x0008_0000;
+    const COMMAND_FLAG: u64 = 0x0010_0000;
+    const KEYCODE_T: i64 = 17;
+
+    static SHORTCUT_SENDER: OnceLock<SyncSender<&'static str>> = OnceLock::new();
+
+    fn shortcut_for_keycode(keycode: i64) -> Option<&'static str> {
+        // Hardware keycodes are layout-independent on macOS.
+        match keycode {
+            0 => Some("shift+a"),
+            46 => Some("shift+m"),
+            7 => Some("shift+x"),
+            4 => Some("shift+h"),
+            15 => Some("shift+r"),
+            1 => Some("shift+s"),
+            33 => Some("shift+["),
+            30 => Some("shift+]"),
+            _ => None,
+        }
+    }
+
+    fn plain_shortcut(keycode: i64, snap_enabled: bool) -> Option<&'static str> {
+        match keycode {
+            13 if snap_enabled => Some("w"),
+            37 if snap_enabled => Some("l"),
+            1 if snap_enabled => Some("s"),
+            46 if snap_enabled => Some("m"),
+            2 => Some("d"),
+            18 => Some("1"),
+            126 => Some("arrowup"),
+            125 => Some("arrowdown"),
+            _ => None,
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        #[test]
+        fn ocr_modes_do_not_replace_edit_or_speech_shortcuts() {
+            assert_eq!(plain_shortcut(1, true), Some("s"));
+            assert_eq!(shortcut_for_keycode(1), Some("shift+s"));
+            assert_eq!(plain_shortcut(46, true), Some("m"));
+            assert_eq!(shortcut_for_keycode(46), Some("shift+m"));
+            assert_eq!(shortcut_for_keycode(0), Some("shift+a"));
+        }
+        #[test]
+        fn mode_letters_pass_through_when_ocr_is_off_and_p_is_never_reserved() {
+            for code in [13, 37, 1, 46] {
+                assert_eq!(plain_shortcut(code, false), None);
+            }
+            assert_eq!(plain_shortcut(35, true), None);
+        }
+    }
+
+    type EventTapCallback = unsafe extern "C" fn(
+        proxy: *mut c_void,
+        event_type: u32,
+        event: CGEventRef,
+        user_info: *mut c_void,
+    ) -> CGEventRef;
+
+    #[link(name = "ApplicationServices", kind = "framework")]
+    extern "C" {
+        fn CGEventTapCreate(
+            tap: u32,
+            place: u32,
+            options: u32,
+            events_of_interest: u64,
+            callback: EventTapCallback,
+            user_info: *mut c_void,
+        ) -> CFMachPortRef;
+        fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
+        fn CGEventGetFlags(event: CGEventRef) -> u64;
+        fn CGEventGetIntegerValueField(event: CGEventRef, field: u32) -> i64;
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        static kCFRunLoopCommonModes: *const c_void;
+        fn CFMachPortCreateRunLoopSource(
+            allocator: *const c_void,
+            port: CFMachPortRef,
+            order: isize,
+        ) -> CFRunLoopSourceRef;
+        fn CFRunLoopGetCurrent() -> CFRunLoopRef;
+        fn CFRunLoopAddSource(
+            run_loop: CFRunLoopRef,
+            source: CFRunLoopSourceRef,
+            mode: *const c_void,
+        );
+        fn CFRunLoopRun();
+    }
+
+    unsafe extern "C" fn filter_shortcuts(
+        _proxy: *mut c_void,
+        event_type: u32,
+        event: CGEventRef,
+        _user_info: *mut c_void,
+    ) -> CGEventRef {
+        if event.is_null() || (event_type != KEY_DOWN && event_type != KEY_UP) {
+            return event;
+        }
+
+        let flags = CGEventGetFlags(event);
+        let keycode = CGEventGetIntegerValueField(event, KEYCODE_FIELD);
+        let command = flags & COMMAND_FLAG != 0;
+        let plain_command = command
+            && flags & SHIFT_FLAG == 0
+            && flags & CONTROL_FLAG == 0
+            && flags & ALTERNATE_FLAG == 0;
+
+        if plain_command && keycode == KEYCODE_T {
+            if event_type == KEY_DOWN && CGEventGetIntegerValueField(event, AUTOREPEAT_FIELD) == 0 {
+                if let Some(sender) = SHORTCUT_SENDER.get() {
+                    let _ = sender.try_send("meta+t");
+                }
+            }
+
+            return ptr::null_mut();
+        }
+
+        if flags & (COMMAND_FLAG | CONTROL_FLAG | ALTERNATE_FLAG) != 0 {
+            return event;
+        }
+
+        if flags & SHIFT_FLAG != 0 {
+            let Some(shortcut) = shortcut_for_keycode(keycode) else {
+                return event;
+            };
+
+            if event_type == KEY_DOWN && CGEventGetIntegerValueField(event, AUTOREPEAT_FIELD) == 0 {
+                if let Some(sender) = SHORTCUT_SENDER.get() {
+                    let _ = sender.try_send(shortcut);
+                }
+            }
+
+            // Returning null consumes only the shortcut's character key. Shift
+            // itself and all mouse/pointer events continue to the active app.
+            return ptr::null_mut();
+        }
+
+        // Plain mode keys are reserved only while OCR is active. Keep this in
+        // the same event tap as main's shortcuts to avoid duplicate dispatch.
+        let shortcut = plain_shortcut(keycode, crate::ocr_snap::auto_snap_enabled());
+        if let Some(shortcut) = shortcut {
+            if event_type == KEY_DOWN && CGEventGetIntegerValueField(event, AUTOREPEAT_FIELD) == 0 {
+                if let Some(sender) = SHORTCUT_SENDER.get() {
+                    let _ = sender.try_send(shortcut);
+                }
+            }
+            return ptr::null_mut();
+        }
+        event
+    }
+
+    pub fn start(window: WebviewWindow) {
+        let (sender, receiver) = mpsc::sync_channel(32);
+        let _ = SHORTCUT_SENDER.set(sender);
+
+        let event_window = window.clone();
+        thread::spawn(move || {
+            while let Ok(shortcut) = receiver.recv() {
+                if event_window.emit("device-key-down", shortcut).is_err() {
+                    break;
+                }
+            }
+        });
+
+        thread::spawn(move || unsafe {
+            let keyboard_mask = (1_u64 << KEY_DOWN) | (1_u64 << KEY_UP);
+            let tap = CGEventTapCreate(
+                1, // kCGSessionEventTap
+                0, // kCGHeadInsertEventTap
+                0, // kCGEventTapOptionDefault (may suppress matched events)
+                keyboard_mask,
+                filter_shortcuts,
+                ptr::null_mut(),
+            );
+
+            if tap.is_null() {
+                eprintln!("Typoscope: shortcut suppression unavailable; using polling fallback");
+                crate::keyboard_hook::start_keyboard_hook(window);
+                return;
+            }
+
+            let source = CFMachPortCreateRunLoopSource(ptr::null(), tap, 0);
+            if source.is_null() {
+                eprintln!("Typoscope: could not create keyboard suppression run loop");
+                return;
+            }
+
+            CFRunLoopAddSource(CFRunLoopGetCurrent(), source, kCFRunLoopCommonModes);
+            CGEventTapEnable(tap, true);
+            CFRunLoopRun();
+        });
+    }
+}
+
+pub fn start_keyboard_suppressor(window: tauri::WebviewWindow) {
+    #[cfg(target_os = "macos")]
+    macos::start(window);
+
+    #[cfg(not(target_os = "macos"))]
+    crate::keyboard_hook::start_keyboard_hook(window);
+}

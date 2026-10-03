@@ -18,6 +18,7 @@ pub struct SnapRect {
     pub height: f64,
     pub bands: Vec<(f64, f64, f64, f64)>,
     pub word_count: usize,
+    pub text: String,
     pub mode: &'static str,
     pub source: &'static str,
     pub latency_ms: f64,
@@ -323,6 +324,7 @@ pub fn start_auto_snap_loop(app: AppHandle) {
                         .map(|&(x, y, w, h)| (x - origin.0, y - origin.1, w, h))
                         .collect(),
                     word_count: unit.word_count,
+                    text: unit.text,
                     mode: mode.as_str(),
                     source: "cache",
                     latency_ms: started.elapsed().as_secs_f64() * 1000.0,
@@ -341,6 +343,7 @@ pub fn start_auto_snap_loop(app: AppHandle) {
                     height,
                     bands: vec![],
                     word_count: 0,
+                    text: String::new(),
                     mode: mode.as_str(),
                     source: "empty",
                     latency_ms: started.elapsed().as_secs_f64() * 1000.0,
@@ -448,6 +451,7 @@ fn rect_changed(a: &SnapRect, b: &SnapRect) -> bool {
         || a.bands != b.bands
         || a.source != b.source
         || a.mode != b.mode
+        || a.text != b.text
 }
 
 fn overlay_cg_window_id(window: &WebviewWindow) -> Option<u32> {

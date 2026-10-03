@@ -1,46 +1,82 @@
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Point } from "./useMousePosition";
 
-async function toWindowPoint(x: number, y: number): Promise<Point> {
+interface WindowFrame {
+  originX: number;
+  originY: number;
+  scaleFactor: number;
+}
+
+async function readWindowFrame(): Promise<WindowFrame> {
   const appWindow = getCurrentWindow();
   const scaleFactor = await appWindow.scaleFactor();
-  const origin = await appWindow.outerPosition();
+  const origin = await appWindow.innerPosition();
 
-  // The backend emits logical screen points on every platform.
   return {
-    x: x - origin.x / scaleFactor,
-    y: y - origin.y / scaleFactor,
+    originX: origin.x,
+    originY: origin.y,
+    scaleFactor,
+  };
+}
+
+function toWindowPoint(
+  screenX: number,
+  screenY: number,
+  frame: WindowFrame,
+): Point {
+  // device_query reports macOS/global coords in logical points; window origin is physical.
+  const originX = frame.originX / frame.scaleFactor;
+  const originY = frame.originY / frame.scaleFactor;
+
+  return {
+    x: screenX - originX,
+    y: screenY - originY,
   };
 }
 
 export function useGlobalMouse(enabled: boolean): Point | null {
   const [position, setPosition] = useState<Point | null>(null);
+  const frameRef = useRef<WindowFrame>({
+    originX: 0,
+    originY: 0,
+    scaleFactor: 1,
+  });
 
   useEffect(() => {
     if (!enabled) {
       return;
     }
 
-    const webview = getCurrentWebviewWindow();
     const appWindow = getCurrentWindow();
-
     void appWindow.setAlwaysOnTop(true);
-    void appWindow.setIgnoreCursorEvents(true);
+
+    void readWindowFrame().then((frame) => {
+      frameRef.current = frame;
+    });
+
+    const refreshFrame = () => {
+      void readWindowFrame().then((frame) => {
+        frameRef.current = frame;
+      });
+    };
+
+    window.addEventListener("resize", refreshFrame);
+    const frameTimer = window.setInterval(refreshFrame, 1000);
 
     let unlisten: (() => void) | undefined;
 
     void listen<{ x: number; y: number }>("device-mouse-move", ({ payload }) => {
-      void toWindowPoint(payload.x, payload.y).then(setPosition);
+      setPosition(toWindowPoint(payload.x, payload.y, frameRef.current));
     }).then((cleanup) => {
       unlisten = cleanup;
     });
 
     return () => {
       unlisten?.();
-      void webview.setIgnoreCursorEvents(false);
+      window.removeEventListener("resize", refreshFrame);
+      window.clearInterval(frameTimer);
     };
   }, [enabled]);
 

@@ -1,12 +1,16 @@
+mod auto_read;
+mod camera_access;
+mod click_through;
+mod keyboard_hook;
+mod keyboard_suppressor;
 mod mouse_hook;
-mod tray;
-mod snap_units;
-
 #[cfg(target_os = "macos")]
 mod ocr_snap;
-
 #[cfg(target_os = "macos")]
 mod screen_capture;
+mod snap_units;
+mod tray;
+mod tts;
 
 #[cfg(target_os = "macos")]
 mod overlay_panel;
@@ -14,6 +18,7 @@ mod overlay_panel;
 #[cfg(not(target_os = "macos"))]
 mod overlay_window;
 
+use keyboard_suppressor::start_keyboard_suppressor;
 use mouse_hook::start_global_mouse_stream;
 use tauri::Manager;
 
@@ -21,7 +26,11 @@ use tauri::Manager;
 pub fn run() {
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_store::Builder::default().build());
+        .plugin(tauri_plugin_store::Builder::default().build())
+        .on_permission_request(|_webview, kind| match kind {
+            tauri::webview::PermissionKind::Camera => tauri::webview::PermissionResponse::Allow,
+            _ => tauri::webview::PermissionResponse::Default,
+        });
 
     #[cfg(target_os = "macos")]
     {
@@ -31,24 +40,37 @@ pub fn run() {
     #[cfg(target_os = "macos")]
     {
         builder = builder.invoke_handler(tauri::generate_handler![
+            auto_read::auto_scroll_step,
+            camera_access::prepare_camera_prompt,
+            camera_access::restore_overlay_policy,
+            click_through::set_click_through,
+            tts::capture_slit,
+            tts::speak_text,
             ocr_snap::set_auto_snap,
             ocr_snap::get_auto_snap,
             ocr_snap::set_snap_mode,
             ocr_snap::get_snap_mode,
         ]);
     }
-
     #[cfg(not(target_os = "macos"))]
     {
-        builder = builder.invoke_handler(tauri::generate_handler![]);
+        builder = builder.invoke_handler(tauri::generate_handler![
+            auto_read::auto_scroll_step,
+            camera_access::prepare_camera_prompt,
+            camera_access::restore_overlay_policy,
+            click_through::set_click_through,
+            tts::capture_slit,
+            tts::speak_text,
+        ]);
     }
-
     builder
         .setup(|app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
-            let window = app.get_webview_window("main").expect("main window not found");
+            let window = app
+                .get_webview_window("main")
+                .expect("main window not found");
 
             #[cfg(target_os = "macos")]
             overlay_panel::configure(window.clone())?;
@@ -56,11 +78,10 @@ pub fn run() {
             #[cfg(not(target_os = "macos"))]
             overlay_window::configure(window.clone())?;
 
-            start_global_mouse_stream(window);
-
+            start_global_mouse_stream(window.clone());
+            start_keyboard_suppressor(window);
             #[cfg(target_os = "macos")]
             ocr_snap::start_auto_snap_loop(app.handle().clone());
-
             tray::setup_tray(app.handle())?;
 
             Ok(())

@@ -8,23 +8,18 @@ The change fixes Retina coordinate mapping, capture below the overlay, punctuati
 
 ## Validation
 
-- `cargo test --manifest-path src-tauri/Cargo.toml --lib`: 24 geometry, grouping, and refresh tests.
-- `npm test`: migration and mode-cycle regression checks.
+- `cargo test --manifest-path src-tauri/Cargo.toml --lib`: 26 geometry, grouping, refresh, and shortcut tests.
+- `npm test`: five migration, mode-cycle, and timer regression checks.
 - `npm run tauri -- build --bundles app`: frontend and native release build, including the macOS OCR sidecar.
 - Synthetic Retina OCR covers top, middle, and bottom text; transparent images must fail explicitly.
 - Follow the README manual MVP acceptance steps before merge. Automated checks do not establish that the live Times article is flicker-free on the user's machine.
 
 ## Integration with main
 
-At review time, main is `6076e91` and includes edit controls, auto-reading, face-distance alarms, and a screen-break timer. This OCR feature branch predates those changes. Integrate both behaviors when resolving overlap; do not replace main's newer UI wholesale with the older OCR UI.
+Merged main `e6d188b`, including edit controls, auto-reading, face-distance alarms, screen-break timers, and speech. The shared canvas renderer keeps main's anti-trail behavior and drag/resize handles while clipping OCR selections to separate line openings.
 
-Pay particular attention to:
+Settings migration preserves both the box/scroll/panel preferences and OCR preferences. Paragraph mode remains disabled. OCR pauses during edit, paused follow, auto-read scrolling, or a hidden overlay.
 
-- `src/App.tsx`: preserve edit/pause/auto-read/timer flows and add OCR state, event filtering, and shortcuts. Shift+M is edit mode on main; plain M cycles OCR only while auto-snap is enabled.
-- `src/components/TyposcopeOverlay.tsx` and its CSS: retain main's drag/resize handles while using per-line mask openings for OCR selections.
-- Settings migration: preserve main's box, scroll, and panel settings and add the OCR defaults and paragraph-to-word migration.
-- Mouse hooks: emit logical screen points once on macOS, without double-dividing by Retina scale. Preserve main's drag-session behavior and keyboard listener/suppressor.
-- `src-tauri/src/lib.rs`: register both OCR and main's existing commands in the platform-appropriate invoke handlers.
-- `package.json`: preserve main's asset-sync scripts and face-detection dependency as well as the new settings tests.
+Shift+A toggles OCR; W/L/S and M choose modes while it is active. Shift+M remains edit mode, and Shift+S speaks the recognized selection (or captures the ordinary box when no selection exists). One native command handler per platform registers both feature sets, and one macOS keyboard tap dispatches shortcuts.
 
-This handoff prepares the OCR branch for review; it does not claim a completed integration with main, signing/notarization, secondary-display support, or live interaction acceptance.
+Live permission, rendering, dragging, scrolling, and speech acceptance still require the README manual checks on macOS. Signing/notarization and secondary-display support remain outside this MVP.

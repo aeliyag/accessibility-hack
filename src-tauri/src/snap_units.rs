@@ -60,6 +60,7 @@ pub struct UnitRect {
     pub width: f64,
     pub height: f64,
     pub word_count: usize,
+    pub text: String,
     /// Optional multi-band covers for wrapped sentences (top→bottom order).
     pub bands: Vec<(f64, f64, f64, f64)>, // x,y,w,h per line band
 }
@@ -333,6 +334,11 @@ fn union_boxes(words: &[&WordBox]) -> Option<UnitRect> {
         width: (right - left + pad_x * 2.0).max(8.0),
         height: (bottom - top + pad_y * 2.0).max(8.0),
         word_count: words.len(),
+        text: words
+            .iter()
+            .map(|w| w.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" "),
         bands: Vec::new(),
     })
 }
@@ -547,6 +553,7 @@ pub fn select_unit_with_margin(
                     width: trimmed.width + pad_x * 2.0,
                     height: trimmed.height + pad_y * 2.0,
                     word_count: 1,
+                    text: lines[li].words[wi].text.clone(),
                     bands: vec![(
                         trimmed.x - pad_x,
                         trimmed.y - pad_y,
@@ -734,6 +741,7 @@ mod tests {
             let unit = select_unit(&lines, SnapMode::Sentence, x, y).unwrap();
             assert_eq!(unit.word_count, 4);
             assert_eq!(unit.bands.len(), 3);
+            assert_eq!(unit.text, "This sentence continues here.”");
             assert!(dist_to_unit(&unit, 20.0, 17.0) > 0.0);
         }
         assert_eq!(

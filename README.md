@@ -1,6 +1,6 @@
 # Typoscope
 
-A cross-platform desktop reading guide that overlays a transparent mask on your screen, leaving a horizontal slit visible so you can focus on one or two lines of text at a time.
+A cross-platform desktop reading guide that overlays a transparent mask on your screen, leaving a bounded reading box visible so you can focus on text without visual crowding.
 
 Built with **Tauri 2**, **React 19**, and **TypeScript**. The overlay architecture is adapted from the [eye-stick-figure](https://github.com/aeliyag/eye-stick-figure) reference project.
 
@@ -16,36 +16,50 @@ It can help people with:
 
 ## Features
 
-- Full-screen transparent overlay with a reading slit that follows your mouse
-- Click-through overlay — interact with apps underneath normally
-- Adjustable slit height, mask opacity, and underlay color
+- Bounded reading box centered on your mouse (follow mode)
+- OCR word, line, and wrapped-sentence snapping (macOS); paragraph mode is disabled
+- Speech for the selected OCR text or reading box (Shift+S, macOS)
+- **Edit mode** (Shift+M toggle) — drag to move, corner handles to resize, scroll-speed slider; no on-screen labels
+- **Auto-read** (Shift+R toggle) — slowly scrolls the page or document under your cursor at a comfortable reading speed; the reading box stays put while content moves
+- **Controls panel** (Shift+H toggle) — keyboard shortcut reference overlay
+- **Screen timers** (Cmd+T toggle) — MediaPipe watches the webcam. An alarm sounds if your face stays too close for 10 minutes. If your eyes stay on the screen for 20 minutes, Typoscope asks you to look 20 feet away and starts a 20 second timer
+- Click-through overlay in follow mode — interact with apps underneath normally
+- Adjustable box size, mask opacity, and underlay color
 - Global keyboard shortcuts (no focus required)
 - Settings persist across restarts
 - System tray for show / hide / quit (macOS runs as a background accessory app)
 
-## MVP scope
+## Modes
 
-The current MVP targets macOS on the primary display: free-follow reading, word snapping across the screen, and wrapped sentences within a text column. Paragraph snapping is disabled for this MVP; saved paragraph preferences fall back to word mode. OCR is macOS-only; the basic overlay remains available on other supported platforms.
+| Mode | Trigger | Behavior |
+| --- | --- | --- |
+| **Follow** (default) | — | Box center tracks mouse; clicks pass through to apps below |
+| **Edit** | Shift+M (toggle) | Box position frozen; drag body or corners to arrange; blue slider adjusts scroll speed; overlay captures mouse |
+| **Auto-read** | Shift+R (toggle) | Scrolls content under the cursor at reading speed; box X tracks mouse, Y stays fixed |
 
 ## Keyboard shortcuts
 
 | Key | Action |
 | --- | --- |
-| ↑ / ↓ | Nudge the reading slit up or down |
-| G / H | Increase / decrease slit height |
-| [ / ] | Decrease / increase mask opacity |
-| 1 | Cycle underlay color presets |
-| T | Toggle overlay visibility |
-| D | Toggle debug HUD |
 | Shift+A | Toggle OCR auto-snap |
-| W / L / S | Set snap mode to word / line / sentence (**only while auto-snap is on**) |
-| M | Cycle snap modes (**only while auto-snap is on**) |
+| W / L / S | Word / line / sentence mode while auto-snap is active |
+| M | Cycle OCR modes while auto-snap is active |
+| Shift+S | Speak selected text or reading box |
+| Shift+X | Toggle mouse follow (static / dynamic) |
+| Shift+M | Toggle edit mode (drag / resize / scroll speed) |
+| Shift+R | Toggle auto-read (scroll content under cursor) |
+| Shift+H | Show / hide controls panel |
+| Cmd+T | Show / hide screen timers |
+| ↑ / ↓ | Nudge the reading box up or down |
+| Shift+[ / Shift+] | Decrease / increase mask opacity |
+| 1 | Cycle underlay color presets |
+| D | Toggle debug HUD |
 
 ## Development
 
 ### Prerequisites
 
-- Node.js 22.12+ (required by Vite 8)
+- Node.js 22.12+
 - Rust stable (edition 2021)
 - macOS: Xcode Command Line Tools (for NSPanel overlay support)
 
@@ -63,7 +77,7 @@ Fast UI iteration without rebuilding Rust:
 npm run dev
 ```
 
-Open http://localhost:1420 — uses local mouse tracking with a dark preview background.
+Open http://localhost:1420 — uses local mouse tracking with a dark preview background. Shift+M works via keyboard.
 
 ### Tauri dev mode
 
@@ -72,6 +86,43 @@ Full transparent overlay with global mouse and keyboard:
 ```bash
 npm run tauri -- dev
 ```
+
+### Production build
+
+```bash
+npm run tauri -- build --bundles app
+```
+
+## Platform notes
+
+| Platform | Status |
+| --- | --- |
+| **macOS** | Best supported — uses NSPanel for non-activating overlay across Spaces and fullscreen apps. Grant **Accessibility** so shortcuts (Shift+X, Cmd+T, etc.) do not type into apps below, and **Camera** so face distance and the 20-minute eye break can run |
+| **Windows** | Transparent always-on-top window sized to primary monitor |
+| **Linux (X11)** | Same as Windows; global mouse polling via `device_query` |
+| **Linux (Wayland)** | Limited — global mouse polling and layered overlays are inconsistent on Wayland; arrow-key nudging still works |
+
+Multi-monitor support is limited to the primary monitor in v1.
+
+## Project structure
+
+```
+src/
+  components/TyposcopeOverlay.tsx   # Mask + reading box rendering
+  components/TyposcopeHandles.tsx   # Edit mode drag + corner resize
+  components/ScrollSpeedHandle.tsx  # Edit mode scroll-speed slider
+  components/ControlsPanel.tsx      # Shift+H shortcut reference
+  components/TimerHud.tsx           # Cmd+T screen timers and break alerts
+  hooks/                            # Mouse tracking, face guard, settings, click-through
+  lib/                              # Settings, box geometry, screen-break timers
+src-tauri/
+  src/overlay_panel.rs              # macOS NSPanel configuration
+  src/overlay_window.rs             # Windows/Linux monitor sizing
+  src/mouse_hook.rs                 # Global mouse + keyboard polling
+  src/tray.rs                       # System tray menu
+```
+
+## OCR word and sentence snapping
 
 **macOS permissions**
 
@@ -112,38 +163,10 @@ Use the built-in display and a browser article with wrapped sentences:
 
 Automated geometry and scheduling checks do not replace this live permission and interaction check.
 
-### Production build
-
-```bash
-npm run tauri -- build
-```
-
 On macOS, `build.rs` compiles the Swift OCR helper for the selected architecture and Tauri bundles it beside the app executable. The generated `src-tauri/binaries/` directory is ignored by Git. The app resolves the helper relative to itself, so OCR does not depend on the original build folder. Local builds are not a signed/notarized public release.
 
-## Platform notes
 
-| Platform | Status |
-| --- | --- |
-| **macOS** | Best supported — uses NSPanel for non-activating overlay across Spaces and fullscreen apps |
-| **Windows** | Transparent always-on-top window sized to primary monitor |
-| **Linux (X11)** | Same as Windows; global mouse polling via `device_query` |
-| **Linux (Wayland)** | Limited — global mouse polling and layered overlays are inconsistent on Wayland; arrow-key nudging still works |
-
-Multi-monitor support is limited to the primary monitor in v1.
-
-## Project structure
-
-```
-src/
-  components/TyposcopeOverlay.tsx   # Mask + reading slit rendering
-  hooks/                            # Mouse tracking, smoothing, settings
-  lib/                              # Settings defaults and Tauri detection
-src-tauri/
-  src/overlay_panel.rs              # macOS NSPanel configuration
-  src/overlay_window.rs             # Windows/Linux monitor sizing
-  src/mouse_hook.rs                 # Global mouse + keyboard polling
-  src/tray.rs                       # System tray menu
-```
+OCR pauses during edit mode, paused following, auto-read scrolling, and hidden overlays. Shift+S speaks the recognized word or sentence when one is selected; otherwise it reads the normal reading box. Plain S selects sentence mode only while auto-snap is enabled.
 
 ## License
 
